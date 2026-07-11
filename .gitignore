@@ -1,0 +1,19 @@
+# Secrets
+.env
+
+# Local runtime state (SQLite DBs, personal data)
+data/*.db
+
+# Personal resume/CV content and generated per-company tailored output
+cv/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Virtual environment
+.venv/
+
+# uv
+# (uv.lock is intentionally NOT ignored - it's committed for reproducible installs)
