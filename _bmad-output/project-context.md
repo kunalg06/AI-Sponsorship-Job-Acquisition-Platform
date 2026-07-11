@@ -97,7 +97,8 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - No `.ruff.toml`, `.flake8`, `black` config, or `mypy.ini` — no automated style/type gate. Consistency comes from matching existing file style by eye.
 
 **Version Control:**
-- **This project has no git repo yet, and no `.gitignore`.** `.env` (holds `GEMINI_API_KEY`) and all `data/*.db` files sit untracked in the project root with nothing excluding them. **Before the first `git init`/`git add`, a `.gitignore` must exist** covering at minimum `.env`, `data/*.db`, `__pycache__/`, `.venv/` — otherwise secrets and local runtime DBs go into the first commit.
+- Git repo exists, pushed to `github.com/kunalg06/AI-Sponsorship-Job-Acquisition-Platform`, public. `.gitignore` exists at the repo root and correctly excludes `.env`, `data/*.db`, `cv/`, `.venv/`, `.pytest_cache/` — verify any new secret/local-state file is covered there before committing, don't assume it already is.
+- **Default branch is `master`** (a short-lived `main` was used mid-session and has since been deleted, both locally and on the remote, after confirming it was fully merged) — don't recreate or push to `main`.
 
 **Code Organization:**
 - One package per domain area under `src/` (`register`, `jobs`, `resume`, `roadmap`), each with its own `db.py`, `cli.py`, and domain logic — new domain areas should follow the same shape.
@@ -106,18 +107,18 @@ _This file contains critical rules and patterns that AI agents must follow when 
 
 **Documentation Requirements:**
 - Module-level docstrings explain design rationale ("why"), not just "what" — this is the primary internal documentation; there's no separate architecture doc or ADR log.
-- **`docs/v1-scope.md` is the de facto source of truth for product scope/design decisions** — there is no PRD or architecture.md in this repo. A second decision record (the MCP integration decisions reconciled earlier in this session) currently exists only in conversation history, not written into the repo anywhere — worth saving to `docs/` if it should persist past this session.
+- **`docs/v1-scope.md` is the de facto source of truth for product scope/design decisions** — there is no PRD or architecture.md in this repo. A second decision record — the MCP integration decisions and their full implementation/review trail — now lives in `_bmad-output/implementation-artifacts/spec-mcp-tool-wrappers.md`, a properly structured spec doc (intent, boundaries, I/O matrix, review triage log), not just conversation history.
 
 ### Development Workflow Rules
 
 **Git/Repository Rules:**
-- No git repo exists yet — no branch naming, commit message format, or PR process to document; these genuinely don't exist, they're not "undocumented." See Code Quality & Style Rules → Version Control for the `.gitignore`-before-`git init` requirement.
+- Single-branch workflow: commits go directly to `master`, no PR process, no branch naming convention — this is a genuine choice for a personal single-user tool, not a gap to fill in. See Code Quality & Style Rules → Version Control for the repo/branch/`.gitignore` state.
 
 **Deployment Patterns:**
 - No deployment target — runs locally only, via `uv run streamlit run app.py`. No CI/CD, no hosting config, no Dockerfile.
 
 **Durability:**
-- No git history and no visible backup/sync means `data/*.db` (sponsor overrides, application tracker, resume/profile history) currently has exactly one copy, on this machine. Not a code change to make — just don't assume any of this state is recoverable if it's lost.
+- Code is now backed up via git/GitHub. `data/*.db` (sponsor overrides, application tracker, resume/profile history) is **intentionally gitignored** and still has exactly one copy, on this machine, with no backup/sync. Not a code change to make — just don't assume the actual data is recoverable if it's lost, only the code is.
 
 ### Critical Don't-Miss Rules
 
@@ -132,7 +133,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - **No DB-level uniqueness on `jobs`** — pasting the same posting twice (different session, forgotten dedup) creates two independent rows, not an update or a rejected duplicate. `jobs` is insert-only by design; don't assume "one posting = one row" without checking.
 
 **Security Rules:**
-- See Code Quality & Style Rules → Version Control: `.gitignore` must exist before the first `git init`/`git add`, or `.env` (`GEMINI_API_KEY`) and `data/*.db` land in the first commit.
+- `.env` (`GEMINI_API_KEY`) and `data/*.db` are excluded via the repo's existing `.gitignore` — verify this stays true (don't accidentally `git add -f` one, and re-check `.gitignore` coverage whenever a new secret/local-state file is added).
 
 **Performance Gotchas:**
 - No enrichment of all ~122k sponsor register rows upfront — lazy enrichment only for companies that actually surface a matching job, per `docs/v1-scope.md` §1.
