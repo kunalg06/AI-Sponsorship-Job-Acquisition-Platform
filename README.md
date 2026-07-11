@@ -66,6 +66,49 @@ uv run python -m roadmap.cli status
 
 Run `uv run python -m <module>.cli --help` for the full command list of any of the four.
 
+## MCP integration
+
+`src/mcp_server/` exposes four read/write operations from the pipeline as MCP
+(Model Context Protocol) tools, so an MCP client (Claude Desktop, Claude Code)
+can query and update your job search conversationally instead of through the
+UI. It's a thin wrapper only — no business logic lives here, and no LangGraph
+or agent orchestration is involved.
+
+| Tool | Wraps | Purpose |
+|---|---|---|
+| `check_sponsor` | `jobs.sponsor_check` + `register.db` | Look up whether a company is a licensed UK sponsor |
+| `check_salary_threshold` | `jobs.salary_check` | Check a stated salary against the Skilled Worker minimum for a role |
+| `track_application` | `jobs.db` | Mark a tracked job `applied` or `discarded` |
+| `list_applications` | `jobs.db` + `jobs.tracker` | List applied jobs, optionally filtered to those with a due follow-up reminder |
+
+**To register it with Claude Desktop**, add this to `claude_desktop_config.json`
+(Settings → Developer, or directly at `%APPDATA%\Claude\claude_desktop_config.json`
+on Windows) and restart the app:
+
+```json
+{
+  "mcpServers": {
+    "sponsorship-job-platform": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "C:\\path\\to\\AI Sponsorship Job Acquisition Platform",
+        "python",
+        "-m",
+        "mcp_server.server"
+      ]
+    }
+  }
+}
+```
+
+To run/verify the server standalone (e.g. for the [MCP Inspector](https://modelcontextprotocol.io/docs/tools/inspector) or any other MCP client):
+
+```bash
+uv run python -m mcp_server.server
+```
+
 ## Testing
 
 ```bash
@@ -80,6 +123,7 @@ src/
   jobs/       job intake, sponsor/salary checks, match scoring, tailoring, outreach, tracker
   resume/     resume/profile storage and structured extraction
   roadmap/    goal/milestone planner
+  mcp_server/ MCP tool wrappers over the pipeline (for Claude Desktop/Code)
 views/        Streamlit pages (routed from app.py)
 tests/        one test file per module
 data/         local SQLite state (gitignored — sponsors.db, jobs.db, profile.db, roadmap.db)
