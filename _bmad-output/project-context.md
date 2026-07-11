@@ -28,15 +28,18 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - `pydantic>=2.0` (unbounded) — used for LLM response schemas via `.model_json_schema()` at all 3 Gemini call sites. **Rule: pydantic minor version bumps can change generated schema shape — retest all 3 LLM call sites after any bump, not just run the test suite.**
 - `python-dotenv` — loads `.env` at both `app.py` and CLI entry points. Only `GEMINI_API_KEY` is currently read; **no `.env.example` exists**, so a new env var has no discoverable place to be documented — update this file's rules, not just `.env`, when adding one.
 - `python-docx` — resume/cover-letter generation (`docx_tailor.py`)
+- `mcp>=1.28.1` — MCP SDK (`FastMCP`), used only by `mcp_server/server.py`
 - `pytest>=8.0` (dev-only dependency)
 - **No ruff/black/mypy configured** — there is no automated gate. An agent must actually run the test suite to call something done; nothing else will catch a mistake before it ships.
 
 **Known gap (not yet fixed, just documented):** `extract.py`/`tailor.py` have no handling for a Gemini response that fails pydantic validation — raw `ValidationError` propagates to the Streamlit UI. Only `outreach.py` has a purpose-built exception (`OutreachLengthError`) for its specific failure mode (channel length cap). Don't assume the same safety net exists in the other two.
 
-**MCP integration (planned direction, not yet implemented):** a separate review session decided MCP should be a thin interface layer over the existing pipeline — exposing `register`/`sponsor_check`/`salary_check`/`tracker` functions as MCP tools (e.g. `check_sponsor`, `check_salary_threshold`, `track_application`) — never a parallel/duplicate implementation, and never an excuse to introduce LangGraph or agent orchestration (already correctly cut from V1 and confirmed absent from the codebase). As of this writing:
-- No `mcp`/`fastmcp` dependency or code exists anywhere in `src/`, `views/`, `tests/`, or `pyproject.toml` — this is unbuilt, not partially built.
-- The functions it would wrap already exist and already match spec exactly: `register/normalize.py` (T/A + LTD/LIMITED/LLP/PLC stripping), `register/ingest.py` (`REQUIRED_COLUMNS = {"Organisation Name", "Town/City", "County", "Type & Rating", "Route"}`), `jobs/sponsor_check.py`, `jobs/salary_check.py`, `jobs/tracker.py` + `jobs/db.py` (`applied_status` strictly `'applied'`/`'discarded'`, one row per (company, role) posting).
-- If/when built: wrap, don't reimplement. `register_lookup`/`check_sponsor_status` take an open `sqlite3.Connection` as their first arg — an MCP tool wrapper must own connection open/close per call, not hold a long-lived connection across tool invocations in a server process. `tracker.due_milestone` is a pure function (no I/O) — call it from a thin DB-backed tool, don't re-derive its logic inline.
+**MCP integration (implemented, see `src/mcp_server/`):** exposes the pipeline as four MCP tools — `check_sponsor`, `check_salary_threshold`, `track_application`, `list_applications` — verified end-to-end against a real MCP client (Claude Desktop, and a direct stdio protocol round-trip). Registered via `%APPDATA%\Claude\claude_desktop_config.json` → `mcpServers` (see README → MCP integration for the exact snippet).
+- `src/mcp_server/tools.py` — all business logic; a thin wrapper only, zero import of the `mcp` package (stays importable/testable without the SDK). Each function owns its own DB connection lifecycle (open → `PRAGMA busy_timeout = 5000` → use → close in `finally`) — never a connection held across calls, since the MCP server is a long-running process.
+- `src/mcp_server/server.py` — the only file that imports `mcp`; thin `@mcp.tool()` registrations delegating straight to `tools.py`.
+- **Default DB paths are anchored to the project root** via `Path(__file__).resolve().parents[2]`, not CWD-relative — an MCP client spawns the server with an arbitrary working directory, and a relative default would have silently pointed every tool at a fresh, empty auto-created DB instead of erroring. Don't reintroduce a relative default here.
+- Still wrap, don't reimplement, for any future tool added here: `register/normalize.py`, `register/ingest.py`, `jobs/sponsor_check.py`, `jobs/salary_check.py`, `jobs/tracker.py`, `jobs/db.py` are all read-only references for this layer.
+- Known gap, deferred (see `_bmad-output/implementation-artifacts/deferred-work.md`): `track_application` has no audit trail (who/when/what) for its mutating calls.
 
 ## Critical Implementation Rules
 
