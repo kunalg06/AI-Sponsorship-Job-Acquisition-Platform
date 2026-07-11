@@ -2,12 +2,13 @@
 title: 'MCP tool wrappers over the job-search pipeline'
 type: 'feature'
 created: '2026-07-11'
-status: 'in-review'
+status: 'done'
 review_loop_iteration: 0
 followup_review_recommended: true
 context: ['{project-root}/_bmad-output/project-context.md']
 warnings: ['oversized']
 baseline_revision: 'd5a2494f8ff489ae05a57d72dc78a4f4152fe50b'
+final_revision: '4fc8104f2bae4ea8fe3fbc11a11225bc762026c4'
 ---
 
 <intent-contract>
