@@ -3,6 +3,8 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-mcp-tool-wrappers.md`
   summary: `mcp_server.tools.track_application` has no audit trail (who/when/what) for its mutating calls (mark applied/discarded).
   evidence: An MCP client can trigger a permanent tracker-state mutation with no logging anywhere of the invocation, making it impossible to reconstruct after the fact what an autonomous agent changed and when — flagged in the 2026-07-11 adversarial review of `spec-mcp-tool-wrappers.md`.
+  status: done 2026-07-12
+  resolution: Implemented via `_bmad-output/implementation-artifacts/spec-mcp-track-application-audit-trail.md` — new `mcp_audit_log` table written by `track_application` for every attempt reaching a DB connection (success, unknown-job-id rejection, mutation-raises rejection); invalid-action calls stay a zero-I/O fast-fail and are not logged (resolved intent_gap). 153/153 tests passing.
 
 - source_spec: none
   summary: Add a `requirements.txt` (with `-e .`) so this app can be deployed to Streamlit Community Cloud, which doesn't use `uv`.
