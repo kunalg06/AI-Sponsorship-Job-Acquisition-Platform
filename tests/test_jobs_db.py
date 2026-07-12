@@ -3,7 +3,9 @@ from jobs.db import (
     get_job,
     insert_job,
     list_applied_jobs,
+    list_job_ids_and_company_names,
     list_jobs,
+    list_legacy_tailored_rows,
     mark_applied,
     mark_discarded,
     mark_reminders_sent_through,
@@ -212,18 +214,106 @@ def test_update_tailoring_persists_all_fields(tmp_path):
             conn,
             job_id,
             tailor_hash="abc123",
-            tailored_resume="TAILORED RESUME",
-            cover_letter="COVER LETTER",
             evidence_notes=["backed by repo X"],
             portfolio_gaps=["no Kubernetes experience"],
+            page_risk_warning="Tailored resume text is +120 chars vs the original - may push past 1 page.",
         )
 
         row = get_job(conn, job_id)
         assert row["tailor_hash"] == "abc123"
-        assert row["tailored_resume"] == "TAILORED RESUME"
-        assert row["cover_letter"] == "COVER LETTER"
         assert row["tailor_evidence_notes"] == '["backed by repo X"]'
+        assert row["tailor_page_risk_warning"] == "Tailored resume text is +120 chars vs the original - may push past 1 page."
         assert row["tailored_at"] is not None
+    finally:
+        conn.close()
+
+
+def test_update_tailoring_persists_a_none_page_risk_warning(tmp_path):
+    # A fresh generation that's well within the page budget stores no
+    # warning at all - the round-trip must preserve None, not coerce it to
+    # an empty string or the literal text "None".
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        extraction = JobExtraction(job_title="AI Engineer", is_agency_posting=False)
+        job_id = insert_job(conn, "raw text", extraction)
+
+        update_tailoring(
+            conn,
+            job_id,
+            tailor_hash="abc123",
+            evidence_notes=[],
+            portfolio_gaps=[],
+            page_risk_warning=None,
+        )
+
+        row = get_job(conn, job_id)
+        assert row["tailor_page_risk_warning"] is None
+    finally:
+        conn.close()
+
+
+def test_list_legacy_tailored_rows_returns_rows_with_db_resident_tailored_text(tmp_path):
+    # Simulate a jobs.db created before this refactor - `tailored_resume`/
+    # `cover_letter` still exist as real columns with real data in it, since
+    # `_ensure_columns()` only adds columns, never drops them.
+    import sqlite3
+
+    db_path = tmp_path / "legacy.db"
+    conn = connect(db_path)
+    job_id = insert_job(conn, "raw text", JobExtraction(job_title="AI Engineer", is_agency_posting=False))
+    other_job_id = insert_job(conn, "raw text 2", JobExtraction(job_title="ML Engineer", is_agency_posting=False))
+    conn.close()
+
+    # Manually add the legacy columns and populate one row, as if this DB
+    # predates the refactor (SCHEMA no longer declares them, so a fresh
+    # connect() never creates them).
+    raw_conn = sqlite3.connect(db_path)
+    raw_conn.execute("ALTER TABLE jobs ADD COLUMN tailored_resume TEXT")
+    raw_conn.execute("ALTER TABLE jobs ADD COLUMN cover_letter TEXT")
+    raw_conn.execute(
+        "UPDATE jobs SET tailored_resume = ?, cover_letter = ? WHERE id = ?",
+        ("LEGACY TAILORED RESUME", "LEGACY COVER LETTER", job_id),
+    )
+    raw_conn.commit()
+    raw_conn.close()
+
+    conn = connect(db_path)
+    try:
+        rows = list_legacy_tailored_rows(conn)
+        assert [r["id"] for r in rows] == [job_id]
+        assert rows[0]["tailored_resume"] == "LEGACY TAILORED RESUME"
+        assert rows[0]["cover_letter"] == "LEGACY COVER LETTER"
+        assert other_job_id not in [r["id"] for r in rows]
+    finally:
+        conn.close()
+
+
+def test_list_legacy_tailored_rows_returns_empty_on_a_fresh_db_with_no_legacy_columns(tmp_path):
+    # A brand new DB created after this refactor never gets the
+    # tailored_resume/cover_letter columns at all - querying them directly
+    # would be a hard sqlite3.OperationalError, so this must guard via
+    # PRAGMA table_info and return [] instead of raising.
+    conn = connect(tmp_path / "fresh.db")
+    try:
+        insert_job(conn, "raw text", JobExtraction(job_title="AI Engineer", is_agency_posting=False))
+        assert list_legacy_tailored_rows(conn) == []
+    finally:
+        conn.close()
+
+
+def test_list_job_ids_and_company_names_returns_all_jobs(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        id_with_company = insert_job(
+            conn, "raw text", JobExtraction(job_title="AI Engineer", company_name="Acme AI", is_agency_posting=False)
+        )
+        id_without_company = insert_job(
+            conn, "raw text 2", JobExtraction(job_title="ML Engineer", company_name=None, is_agency_posting=False)
+        )
+
+        rows = {r["id"]: r["company_name"] for r in list_job_ids_and_company_names(conn)}
+        assert rows[id_with_company] == "Acme AI"
+        assert rows[id_without_company] is None
     finally:
         conn.close()
 

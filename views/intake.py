@@ -9,7 +9,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from jobs.cli import DEFAULT_GENERATED_CV_DIR, _sanitize_filename
+from jobs.cli import DEFAULT_GENERATED_CV_DIR, _tailored_docx_paths
 from jobs.db import connect as connect_jobs
 from jobs.db import get_job, insert_job, mark_applied, mark_discarded, update_match_verdict, update_salary_verdict, update_sponsor_verdict
 from jobs.extract import extract_job
@@ -154,15 +154,13 @@ def _render_status_update_form(matched_name: str, town_city: str, county: str, r
                 st.rerun()
 
 
-def _render_download_buttons(out_dir: Path, key_prefix: str) -> None:
-    resume_path = out_dir / "resume.docx"
-    cover_letter_path = out_dir / "cover_letter.docx"
+def _render_download_buttons(resume_path: Path, cover_letter_path: Path, key_prefix: str) -> None:
     cols = st.columns(2)
     if resume_path.exists():
         cols[0].download_button(
             "\U0001f4c4 Download resume (.docx)",
             data=resume_path.read_bytes(),
-            file_name=f"{out_dir.name}_resume.docx",
+            file_name=resume_path.name,
             mime=DOCX_MIME,
             key=f"{key_prefix}_resume",
         )
@@ -170,7 +168,7 @@ def _render_download_buttons(out_dir: Path, key_prefix: str) -> None:
         cols[1].download_button(
             "\U0001f4c4 Download cover letter (.docx)",
             data=cover_letter_path.read_bytes(),
-            file_name=f"{out_dir.name}_cover_letter.docx",
+            file_name=cover_letter_path.name,
             mime=DOCX_MIME,
             key=f"{key_prefix}_cover",
         )
@@ -353,9 +351,10 @@ if extraction:
                 finally:
                     jobs_conn.close()
 
-                company_slug = _sanitize_filename(saved_job["company_name"] or f"job_{saved_job_id}")
-                out_dir = Path(DEFAULT_GENERATED_CV_DIR) / company_slug
-                already_generated = (out_dir / "resume.docx").exists() and (out_dir / "cover_letter.docx").exists()
+                resume_path, cover_letter_path = _tailored_docx_paths(
+                    saved_job["company_name"], saved_job_id, DEFAULT_GENERATED_CV_DIR
+                )
+                already_generated = resume_path.exists() and cover_letter_path.exists()
 
                 st.divider()
                 st.markdown("### Tailored Resume & Cover Letter")
@@ -375,7 +374,7 @@ if extraction:
                             st.rerun()
 
                 if already_generated:
-                    _render_download_buttons(out_dir, key_prefix="current")
+                    _render_download_buttons(resume_path, cover_letter_path, key_prefix="current")
 
                 st.divider()
                 st.markdown("### Recruiter Outreach")

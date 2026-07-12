@@ -11,7 +11,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from jobs.cli import DEFAULT_GENERATED_CV_DIR, _resolve_contact, _sanitize_filename
+from jobs.cli import DEFAULT_GENERATED_CV_DIR, _resolve_contact, _tailored_docx_paths
 from jobs.db import connect as connect_jobs
 from jobs.db import get_job, list_applied_jobs, mark_applied, mark_discarded, mark_reminders_sent_through
 from jobs.outreach import EMAIL, LINKEDIN_NOTE, OutreachLengthError
@@ -41,15 +41,13 @@ CHANNEL_LABELS = {
 CHANNEL_ORDER = [LINKEDIN_NOTE, EMAIL]
 
 
-def _render_download_buttons(out_dir: Path, key_prefix: str) -> None:
-    resume_path = out_dir / "resume.docx"
-    cover_letter_path = out_dir / "cover_letter.docx"
+def _render_download_buttons(resume_path: Path, cover_letter_path: Path, key_prefix: str) -> None:
     cols = st.columns(2)
     if resume_path.exists():
         cols[0].download_button(
             "\U0001f4c4 Download resume (.docx)",
             data=resume_path.read_bytes(),
-            file_name=f"{out_dir.name}_resume.docx",
+            file_name=resume_path.name,
             mime=DOCX_MIME,
             key=f"{key_prefix}_resume",
         )
@@ -57,7 +55,7 @@ def _render_download_buttons(out_dir: Path, key_prefix: str) -> None:
         cols[1].download_button(
             "\U0001f4c4 Download cover letter (.docx)",
             data=cover_letter_path.read_bytes(),
-            file_name=f"{out_dir.name}_cover_letter.docx",
+            file_name=cover_letter_path.name,
             mime=DOCX_MIME,
             key=f"{key_prefix}_cover",
         )
@@ -155,10 +153,20 @@ with st.expander("\U0001f4c1 All previously generated resumes & cover letters"):
     if not company_dirs:
         st.caption("Nothing generated yet.")
     for company_dir in company_dirs:
-        if not ((company_dir / "resume.docx").exists() or (company_dir / "cover_letter.docx").exists()):
+        # job_id-keyed filenames mean a company can have more than one
+        # generated resume (one per role) - list each one separately rather
+        # than assuming a single resume.docx/cover_letter.docx pair.
+        resume_files = sorted(company_dir.glob("*_resume.docx"))
+        if not resume_files:
             continue
         st.markdown(f"**{company_dir.name.replace('_', ' ')}**")
-        _render_download_buttons(company_dir, key_prefix=f"browse_{company_dir.name}")
+        for resume_path in resume_files:
+            job_id_prefix = resume_path.name[: -len("_resume.docx")]
+            cover_letter_path = company_dir / f"{job_id_prefix}_cover_letter.docx"
+            st.caption(f"Job #{job_id_prefix}")
+            _render_download_buttons(
+                resume_path, cover_letter_path, key_prefix=f"browse_{company_dir.name}_{job_id_prefix}"
+            )
 
 st.divider()
 
@@ -264,9 +272,8 @@ else:
                     jobs_conn.close()
                 st.rerun()
 
-        company_slug = _sanitize_filename(job["company_name"] or f"job_{job['id']}")
-        out_dir = Path(DEFAULT_GENERATED_CV_DIR) / company_slug
-        already_generated = (out_dir / "resume.docx").exists() and (out_dir / "cover_letter.docx").exists()
+        resume_path, cover_letter_path = _tailored_docx_paths(job["company_name"], job["id"], DEFAULT_GENERATED_CV_DIR)
+        already_generated = resume_path.exists() and cover_letter_path.exists()
 
         st.divider()
         st.markdown("### Tailored Resume & Cover Letter")
@@ -286,7 +293,7 @@ else:
                     st.rerun()
 
         if already_generated:
-            _render_download_buttons(out_dir, key_prefix=f"list_tailored_{job['id']}")
+            _render_download_buttons(resume_path, cover_letter_path, key_prefix=f"list_tailored_{job['id']}")
 
         st.divider()
         st.markdown("### Recruiter Outreach")

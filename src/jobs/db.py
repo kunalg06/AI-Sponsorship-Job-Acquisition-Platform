@@ -46,10 +46,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     match_reasoning TEXT,
     match_checked_at TEXT,
     tailor_hash TEXT,
-    tailored_resume TEXT,
-    cover_letter TEXT,
     tailor_evidence_notes TEXT,
     tailor_portfolio_gaps TEXT,
+    tailor_page_risk_warning TEXT,
     tailored_at TEXT,
     applied_status TEXT,
     applied_at TEXT,
@@ -250,29 +249,60 @@ def update_tailoring(
     job_id: int,
     *,
     tailor_hash: str,
-    tailored_resume: str,
-    cover_letter: str,
     evidence_notes: list[str],
     portfolio_gaps: list[str],
+    page_risk_warning: Optional[str],
 ) -> None:
+    """Stores only the small, cheap-to-keep-in-the-DB tailoring metadata -
+    the actual tailored resume/cover-letter text lives only as files on disk
+    now (cv/generated_cv/<company>/{job_id}_resume.docx etc.), never here.
+    `page_risk_warning` is computed once at generation time (see
+    `jobs.cli._tailor_docx_for_job`) and read back verbatim on a docx cache
+    hit - never recomputed by diffing files."""
     with conn:
         conn.execute(
             """
             UPDATE jobs
-            SET tailor_hash = ?, tailored_resume = ?, cover_letter = ?,
-                tailor_evidence_notes = ?, tailor_portfolio_gaps = ?, tailored_at = ?
+            SET tailor_hash = ?, tailor_evidence_notes = ?, tailor_portfolio_gaps = ?,
+                tailor_page_risk_warning = ?, tailored_at = ?
             WHERE id = ?
             """,
             (
                 tailor_hash,
-                tailored_resume,
-                cover_letter,
                 json.dumps(evidence_notes),
                 json.dumps(portfolio_gaps),
+                page_risk_warning,
                 datetime.now(timezone.utc).isoformat(),
                 job_id,
             ),
         )
+
+
+def list_legacy_tailored_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Rows with pre-existing DB-resident tailored text from before this app
+    stopped writing it. A fresh DB (created after this change) never gets
+    the `tailored_resume`/`cover_letter` columns at all - they're no longer
+    part of SCHEMA, so `_ensure_columns()` won't add them either. Guard via
+    `PRAGMA table_info` before querying those columns: querying a column
+    that doesn't exist on a fresh DB is a hard sqlite3 error, not an empty
+    result."""
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
+    if "tailored_resume" not in existing or "cover_letter" not in existing:
+        return []
+    return conn.execute(
+        """
+        SELECT id, company_name, tailored_resume, cover_letter
+        FROM jobs
+        WHERE tailored_resume IS NOT NULL OR cover_letter IS NOT NULL
+        """
+    ).fetchall()
+
+
+def list_job_ids_and_company_names(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Small helper for the legacy-docx-rename matcher in `jobs.cli` - keeps
+    that raw lookup behind this module's own DB access boundary instead of
+    an ad-hoc `conn.execute(...)` in cli.py."""
+    return conn.execute("SELECT id, company_name FROM jobs").fetchall()
 
 
 def mark_applied(conn: sqlite3.Connection, job_id: int) -> None:

@@ -16,21 +16,12 @@ from typing import Optional
 from jobs.cli import (
     DEFAULT_GENERATED_CV_DIR,
     DEFAULT_SOURCE_RESUME_DIR,
-    _find_source_resume_docx,
-    _get_or_generate_tailor_text,
     _load_resume_and_narrative,
     _require_raw_resume_text,
-    _sanitize_filename,
+    _tailor_docx_for_job,
 )
 from jobs.db import connect as connect_jobs
 from jobs.db import get_job
-from jobs.docx_tailor import (
-    build_tailored_docx,
-    estimate_page_risk,
-    extract_paragraphs,
-    generate_paragraph_edits,
-    write_plain_docx,
-)
 from jobs.outreach import OutreachDraft, draft_outreach_message
 from jobs.outreach_db import ensure_schema as ensure_outreach_schema
 from jobs.outreach_db import insert_outreach_message
@@ -38,23 +29,27 @@ from jobs.outreach_db import insert_outreach_message
 
 def generate_tailored_docx_for_job(job_id: int, jobs_db: str, profile_db: str) -> tuple[Path, Optional[str]]:
     """Tailor the resume + cover letter for any stored job. Mirrors
-    `jobs.cli tailor-docx`. Returns (output directory, page-risk warning)."""
+    `jobs.cli tailor-docx` via the same shared `_tailor_docx_for_job` helper
+    (job_id-keyed cache-check - see that function's docstring). Returns
+    (output directory, page-risk warning).
+
+    Raises `SystemExit` for an unknown `job_id` - matching the CLI's own
+    `_cmd_tailor`/`_cmd_tailor_docx` convention. Both Streamlit callers of
+    this function (`views/intake.py`, `views/jobs_list.py`) already wrap
+    their call in `except SystemExit as exc: st.error(str(exc))` (since
+    `_require_raw_resume_text`/`_find_source_resume_docx` downstream can
+    already raise it), so this doesn't crash the app - it surfaces as a
+    normal error message like any other failure on this path."""
     jobs_conn = connect_jobs(jobs_db)
     try:
         job = get_job(jobs_conn, job_id)
+        if job is None:
+            raise SystemExit(f"No job #{job_id} found in {jobs_db}")
         raw_resume_text = _require_raw_resume_text(profile_db)
-        text_result = _get_or_generate_tailor_text(jobs_conn, job, raw_resume_text, force=False)
-
-        source_docx = _find_source_resume_docx(DEFAULT_SOURCE_RESUME_DIR)
-        paragraphs = extract_paragraphs(source_docx)
-        rewritten = generate_paragraph_edits(paragraphs, job["raw_text"], job["company_name"])
-
-        company_slug = _sanitize_filename(job["company_name"] or f"job_{job_id}")
-        out_dir = Path(DEFAULT_GENERATED_CV_DIR) / company_slug
-        build_tailored_docx(source_docx, rewritten, out_dir / "resume.docx")
-        write_plain_docx(text_result.cover_letter, out_dir / "cover_letter.docx")
-
-        return out_dir, estimate_page_risk(source_docx, rewritten)
+        result = _tailor_docx_for_job(
+            jobs_conn, job, raw_resume_text, DEFAULT_SOURCE_RESUME_DIR, DEFAULT_GENERATED_CV_DIR, force=False
+        )
+        return result.resume_path.parent, result.page_risk_warning
     finally:
         jobs_conn.close()
 

@@ -18,7 +18,9 @@ from jobs.db import (
     get_job,
     insert_job,
     list_applied_jobs,
+    list_job_ids_and_company_names,
     list_jobs,
+    list_legacy_tailored_rows,
     mark_applied,
     mark_discarded,
     mark_reminders_sent_through,
@@ -240,55 +242,68 @@ def _write_tailoring_files(out_dir: str, job_id: int, tailored_resume: str, cove
     print(f"              {cover_letter_path}")
 
 
+def _fetch_github_evidence(raw_resume_text: str) -> list:
+    """Best-effort GitHub repo evidence for tailoring - a plain API fetch, not
+    a cache-check, so it's safe to share between the plain-text `tailor`
+    path and the docx path without recreating the caching bug this refactor
+    fixes (see Spec Change Log)."""
+    username = extract_github_username(raw_resume_text)
+    if not username:
+        print("  (no GitHub username found in resume - continuing without repo evidence)")
+        return []
+    try:
+        return fetch_public_repos(username)
+    except (urllib.error.URLError, TimeoutError) as exc:
+        print(f"  (couldn't fetch GitHub repos for '{username}': {exc} - continuing without repo evidence)")
+        return []
+
+
 @dataclass
 class TailorTextResult:
-    tailored_resume: str
-    cover_letter: str
+    cover_letter: Optional[str]
     evidence_notes: list
     portfolio_gaps: list
+    page_risk_warning: Optional[str]
     freshly_generated: bool
 
 
-def _get_or_generate_tailor_text(conn, job, raw_resume_text: str, force: bool) -> TailorTextResult:
-    """Shared by `tailor` and `tailor-docx`: reuse the cached cover letter /
-    tailored text for this exact resume+job pair, or generate fresh (with
-    GitHub evidence) and cache it."""
-    new_hash = compute_tailor_hash(raw_resume_text, job["raw_text"])
-    if job["tailor_hash"] == new_hash and not force:
+def _get_or_generate_tailor_text(
+    conn, job, raw_resume_text: str, tailor_hash: str, resume_path: Path, cover_letter_path: Path, force: bool
+) -> TailorTextResult:
+    """Docx-path cache-check ONLY - the plain-text `tailor` command never
+    calls this; it has its own always-fresh path (see `_cmd_tailor`).
+
+    A cache hit requires the resume+job hash to match AND both job_id-keyed
+    docx output files to already exist on disk (job_id-keyed, so a second
+    role at the same company never collides with the first). On a hit,
+    evidence_notes/portfolio_gaps/page_risk_warning are read back from the
+    DB verbatim - no file *content* read of any kind, only an existence
+    check (`Path.exists()`) on the two docx files themselves."""
+    if job["tailor_hash"] == tailor_hash and not force and resume_path.exists() and cover_letter_path.exists():
         return TailorTextResult(
-            tailored_resume=job["tailored_resume"],
-            cover_letter=job["cover_letter"],
+            cover_letter=None,  # unused on a cache hit - the docx isn't rebuilt
             evidence_notes=json.loads(job["tailor_evidence_notes"] or "[]"),
             portfolio_gaps=json.loads(job["tailor_portfolio_gaps"] or "[]"),
+            # Known, accepted transitional limitation: for a job migrated by
+            # `migrate-legacy-tailoring` (tailor_hash set pre-refactor, docx
+            # files renamed into the job_id-keyed scheme), this column is
+            # NULL because it didn't exist when that job was last tailored -
+            # indistinguishable here from `estimate_page_risk`'s own quiet
+            # "genuinely no risk" fallback. Not fixable without an LLM call
+            # or reintroducing docx-diffing (the original pre-tailoring
+            # source docx isn't retained); self-heals the next time this
+            # job's resume or job text actually changes and regenerates.
+            page_risk_warning=job["tailor_page_risk_warning"],
             freshly_generated=False,
         )
 
-    username = extract_github_username(raw_resume_text)
-    repos = []
-    if username:
-        try:
-            repos = fetch_public_repos(username)
-        except (urllib.error.URLError, TimeoutError) as exc:
-            print(f"  (couldn't fetch GitHub repos for '{username}': {exc} - continuing without repo evidence)")
-    else:
-        print("  (no GitHub username found in resume - continuing without repo evidence)")
-
+    repos = _fetch_github_evidence(raw_resume_text)
     result = generate_tailored_application(job["raw_text"], job["company_name"], raw_resume_text, repos)
-
-    update_tailoring(
-        conn,
-        job["id"],
-        tailor_hash=new_hash,
-        tailored_resume=result.tailored_resume,
-        cover_letter=result.cover_letter,
-        evidence_notes=result.evidence_notes,
-        portfolio_gaps=result.portfolio_gaps,
-    )
     return TailorTextResult(
-        tailored_resume=result.tailored_resume,
         cover_letter=result.cover_letter,
         evidence_notes=result.evidence_notes,
         portfolio_gaps=result.portfolio_gaps,
+        page_risk_warning=None,  # not known yet - set by `_tailor_docx_for_job` after the docx rewrite
         freshly_generated=True,
     )
 
@@ -305,6 +320,11 @@ def _require_raw_resume_text(profile_db: str) -> str:
 
 
 def _cmd_tailor(args: argparse.Namespace) -> None:
+    """Plain-text tailoring output (`.txt`, `args.out_dir`). Deliberately
+    uncached - always calls the LLM fresh and always (over)writes its
+    output files. This is a separate, rarely-used output format from the
+    docx path (different directory, different artifact); see Spec Change
+    Log for why sharing one cache-check across both formats was the bug."""
     conn = connect(args.db)
     try:
         job = get_job(conn, args.job_id)
@@ -318,18 +338,16 @@ def _cmd_tailor(args: argparse.Namespace) -> None:
             )
 
         raw_resume_text = _require_raw_resume_text(args.profile_db)
-        result = _get_or_generate_tailor_text(conn, job, raw_resume_text, args.force)
+        repos = _fetch_github_evidence(raw_resume_text)
+        result = generate_tailored_application(job["raw_text"], job["company_name"], raw_resume_text, repos)
 
-        if result.freshly_generated:
-            print(f"Job #{args.job_id}: tailored resume + cover letter generated.")
-            print("  --- Evidence notes ---")
-            for note in result.evidence_notes:
-                print(f"  - {note}")
-            print("  --- Portfolio gaps ---")
-            for gap in result.portfolio_gaps:
-                print(f"  - {gap}")
-        else:
-            print(f"Job #{args.job_id}: tailoring already generated for this exact resume+job pair (cached).")
+        print(f"Job #{args.job_id}: tailored resume + cover letter generated.")
+        print("  --- Evidence notes ---")
+        for note in result.evidence_notes:
+            print(f"  - {note}")
+        print("  --- Portfolio gaps ---")
+        for gap in result.portfolio_gaps:
+            print(f"  - {gap}")
 
         _write_tailoring_files(args.out_dir, args.job_id, result.tailored_resume, result.cover_letter)
     finally:
@@ -342,6 +360,27 @@ def _sanitize_filename(name: str) -> str:
     return slug or "unknown_company"
 
 
+def _company_slug(company_name: Optional[str], job_id: int) -> str:
+    """Shared fallback-slug logic: sanitize `company_name`, or fall back to
+    `job_{job_id}` (then sanitize that too) when there's no company name.
+    Used by BOTH `_tailored_docx_paths` (to build the output path for a job)
+    and `_migrate_legacy_docx`'s job-matching (to figure out which job a
+    legacy company-only-keyed folder belongs to) - a single shared helper so
+    the two can never independently drift apart on how the fallback is
+    computed."""
+    return _sanitize_filename(company_name or f"job_{job_id}")
+
+
+def _tailored_docx_paths(company_name: Optional[str], job_id: int, out_dir: str) -> tuple[Path, Path]:
+    """job_id-keyed docx output paths - matches the existing
+    `{job_id}_resume.txt` txt-export convention, just extended to docx.
+    Keying by job_id (not just company) is what lets a second role at the
+    same company get its own files instead of silently reusing/overwriting
+    the first role's stale ones."""
+    company_dir = Path(out_dir) / _company_slug(company_name, job_id)
+    return company_dir / f"{job_id}_resume.docx", company_dir / f"{job_id}_cover_letter.docx"
+
+
 def _find_source_resume_docx(directory: str) -> Path:
     dir_path = Path(directory)
     candidates = sorted(dir_path.glob("*.docx"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -352,10 +391,72 @@ def _find_source_resume_docx(directory: str) -> Path:
     return candidates[0]
 
 
+@dataclass
+class TailorDocxResult:
+    resume_path: Path
+    cover_letter_path: Path
+    page_risk_warning: Optional[str]
+    freshly_generated: bool
+
+
+def _tailor_docx_for_job(
+    conn, job, raw_resume_text: str, resume_dir: str, out_dir: str, force: bool
+) -> TailorDocxResult:
+    """Shared by `tailor-docx` CLI and `ui_actions.generate_tailored_docx_for_job`.
+
+    Cache-check (job_id-keyed hash + file existence, see
+    `_get_or_generate_tailor_text`) covers the WHOLE docx path - both the
+    cover-letter/evidence-notes text generation AND the paragraph-level
+    docx rewrite - so a cache hit makes no LLM call and reads no file at
+    all (not even the source .docx). `estimate_page_risk` is computed ONLY
+    on a fresh generation, right where `rewritten` is already in hand, and
+    persisted via `update_tailoring` for exact recall on the next hit -
+    never recomputed by diffing docx files (see Spec Change Log)."""
+    resume_path, cover_letter_path = _tailored_docx_paths(job["company_name"], job["id"], out_dir)
+    tailor_hash = compute_tailor_hash(raw_resume_text, job["raw_text"])
+    text_result = _get_or_generate_tailor_text(
+        conn, job, raw_resume_text, tailor_hash, resume_path, cover_letter_path, force
+    )
+
+    if not text_result.freshly_generated:
+        return TailorDocxResult(
+            resume_path=resume_path,
+            cover_letter_path=cover_letter_path,
+            page_risk_warning=text_result.page_risk_warning,
+            freshly_generated=False,
+        )
+
+    source_docx = _find_source_resume_docx(resume_dir)
+    paragraphs = extract_paragraphs(source_docx)
+    rewritten = generate_paragraph_edits(paragraphs, job["raw_text"], job["company_name"])
+
+    build_tailored_docx(source_docx, rewritten, resume_path)
+    write_plain_docx(text_result.cover_letter, cover_letter_path)
+
+    page_risk_warning = estimate_page_risk(source_docx, rewritten)
+
+    update_tailoring(
+        conn,
+        job["id"],
+        tailor_hash=tailor_hash,
+        evidence_notes=text_result.evidence_notes,
+        portfolio_gaps=text_result.portfolio_gaps,
+        page_risk_warning=page_risk_warning,
+    )
+
+    return TailorDocxResult(
+        resume_path=resume_path,
+        cover_letter_path=cover_letter_path,
+        page_risk_warning=page_risk_warning,
+        freshly_generated=True,
+    )
+
+
 def _cmd_tailor_docx(args: argparse.Namespace) -> None:
     """Generate a tailored resume that keeps the original .docx's exact
     fonts/styles/formatting (only wording changes) plus a cover letter,
-    saved under cv/generated_cv/<company>/ for the UI to serve as downloads."""
+    saved under cv/generated_cv/<company>/{job_id}_*.docx for the UI to
+    serve as downloads."""
     conn = connect(args.db)
     try:
         job = get_job(conn, args.job_id)
@@ -369,27 +470,148 @@ def _cmd_tailor_docx(args: argparse.Namespace) -> None:
             )
 
         raw_resume_text = _require_raw_resume_text(args.profile_db)
-        text_result = _get_or_generate_tailor_text(conn, job, raw_resume_text, args.force)
+        result = _tailor_docx_for_job(conn, job, raw_resume_text, args.resume_dir, args.out_dir, args.force)
 
-        source_docx = _find_source_resume_docx(args.resume_dir)
-        paragraphs = extract_paragraphs(source_docx)
-        rewritten = generate_paragraph_edits(paragraphs, job["raw_text"], job["company_name"])
+        if result.freshly_generated:
+            print(f"Job #{args.job_id}: tailored .docx resume + cover letter written to {result.resume_path.parent}/")
+        else:
+            print(
+                f"Job #{args.job_id}: tailoring already generated for this exact resume+job pair "
+                f"(cached) - {result.resume_path.parent}/"
+            )
+        print(f"  - {result.resume_path.name}")
+        print(f"  - {result.cover_letter_path.name}")
 
-        company_slug = _sanitize_filename(job["company_name"] or f"job_{args.job_id}")
-        out_dir = Path(args.out_dir) / company_slug
-        resume_out = out_dir / "resume.docx"
-        cover_letter_out = out_dir / "cover_letter.docx"
+        if result.page_risk_warning:
+            print(f"  Warning: {result.page_risk_warning}")
+    finally:
+        conn.close()
 
-        build_tailored_docx(source_docx, rewritten, resume_out)
-        write_plain_docx(text_result.cover_letter, cover_letter_out)
 
-        print(f"Job #{args.job_id}: tailored .docx resume + cover letter written to {out_dir}/")
-        print(f"  - {resume_out.name}")
-        print(f"  - {cover_letter_out.name}")
+def _migrate_legacy_text(conn, out_dir: str) -> None:
+    """Part 1 of the migration: back up any pre-existing DB-resident
+    tailored text (from before `update_tailoring` stopped writing it) to
+    `.txt` files, matching the plain `tailor` command's own output
+    convention. Idempotent: skips a file that's already there."""
+    rows = list_legacy_tailored_rows(conn)
+    if not rows:
+        print("No legacy DB-resident tailored text found - nothing to do.")
+        return
 
-        warning = estimate_page_risk(source_docx, rewritten)
-        if warning:
-            print(f"  Warning: {warning}")
+    out_path = Path(out_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    wrote_any = False
+    for row in rows:
+        resume_path = out_path / f"{row['id']}_resume.txt"
+        cover_letter_path = out_path / f"{row['id']}_cover_letter.txt"
+        if row["tailored_resume"] and not resume_path.exists():
+            resume_path.write_text(row["tailored_resume"], encoding="utf-8")
+            print(f"  Wrote {resume_path}")
+            wrote_any = True
+        if row["cover_letter"] and not cover_letter_path.exists():
+            cover_letter_path.write_text(row["cover_letter"], encoding="utf-8")
+            print(f"  Wrote {cover_letter_path}")
+            wrote_any = True
+
+    if not wrote_any:
+        print("Legacy DB-resident tailored text already backed up to disk - nothing to do.")
+
+
+def _migrate_legacy_docx(conn, generated_cv_dir: str) -> None:
+    """Part 2 of the migration: rename pre-existing old-format
+    company-only-keyed docx files (`resume.docx`/`cover_letter.docx`) to
+    the new job_id-keyed names, when the mapping to a job is unambiguous.
+    Company-less jobs are matched via their `job_{id}` fallback slug too
+    (via the shared `_company_slug` helper, same one `_tailored_docx_paths`
+    uses), so a legacy folder created for a job with no company_name isn't
+    permanently reported ambiguous. Zero matching jobs -> nothing to
+    disambiguate, just orphaned data with no corresponding job: warn "no
+    matching job found" and skip. Multiple matching jobs -> genuinely
+    ambiguous: warn "ambiguous" and skip. Never guess either way. Each
+    company folder's entire processing block (existence checks, match
+    lookup, renames) is wrapped in its own `try/except OSError` so one bad
+    folder (locked file, permission denied, broken entry) can't abort
+    processing of the rest."""
+    root = Path(generated_cv_dir)
+    if not root.exists():
+        print(f"No {generated_cv_dir}/ directory found - nothing to do.")
+        return
+
+    jobs_by_slug: dict[str, list[int]] = {}
+    for row in list_job_ids_and_company_names(conn):
+        slug = _company_slug(row["company_name"], row["id"])
+        jobs_by_slug.setdefault(slug, []).append(row["id"])
+
+    found_old_format = False
+    renamed_any = False
+
+    try:
+        candidate_dirs = sorted(root.iterdir())
+    except OSError as exc:
+        print(f"  Warning: failed to list {root}: {exc} - aborting migration scan.")
+        return
+
+    for company_dir in candidate_dirs:
+        try:
+            if not company_dir.is_dir():
+                continue
+
+            old_resume = company_dir / "resume.docx"
+            old_cover = company_dir / "cover_letter.docx"
+            if not old_resume.exists() and not old_cover.exists():
+                continue
+            found_old_format = True
+
+            matches = jobs_by_slug.get(company_dir.name, [])
+            if not matches:
+                print(
+                    f"  Warning: no matching job found for legacy docx folder '{company_dir}' - "
+                    "skipping (not renamed, not deleted)."
+                )
+                continue
+            if len(matches) > 1:
+                print(
+                    f"  Warning: ambiguous legacy docx folder '{company_dir}' - {len(matches)} matching "
+                    "job(s) in jobs.db - leaving untouched (not renamed, not deleted)."
+                )
+                continue
+
+            job_id = matches[0]
+            for old_path, new_name in (
+                (old_resume, f"{job_id}_resume.docx"),
+                (old_cover, f"{job_id}_cover_letter.docx"),
+            ):
+                if not old_path.exists():
+                    continue
+                new_path = company_dir / new_name
+                if new_path.exists():
+                    print(f"  Skipped {old_path} - {new_path} already exists.")
+                    continue
+                try:
+                    old_path.rename(new_path)
+                    print(f"  Renamed {old_path} -> {new_path}")
+                    renamed_any = True
+                except OSError as exc:
+                    print(f"  Warning: failed to rename {old_path}: {exc} - leaving it untouched, continuing.")
+        except OSError as exc:
+            print(f"  Warning: failed to process legacy docx folder '{company_dir}': {exc} - skipping, continuing with the rest.")
+            continue
+
+    if not found_old_format:
+        print(f"No old-format company-only-keyed docx files found under {generated_cv_dir}/ - nothing to do.")
+    elif not renamed_any:
+        print("Legacy docx files already migrated (or all remaining ones could not be matched to a job) - nothing further to do.")
+
+
+def _cmd_migrate_legacy_tailoring(args: argparse.Namespace) -> None:
+    """One-time, idempotent migration: (1) back up DB-resident tailored text
+    to `.txt` files, (2) rename old-format company-only-keyed docx files to
+    job_id-keyed names where the company->job mapping is unambiguous. Safe
+    to re-run - every step skips anything already migrated."""
+    conn = connect(args.db)
+    try:
+        _migrate_legacy_text(conn, args.out_dir)
+        _migrate_legacy_docx(conn, args.generated_cv_dir)
     finally:
         conn.close()
 
@@ -713,6 +935,22 @@ def build_parser() -> argparse.ArgumentParser:
     tailor_docx_parser.add_argument("--out-dir", default=DEFAULT_GENERATED_CV_DIR, help="Directory to write generated_cv/<company>/ into")
     tailor_docx_parser.add_argument("--force", action="store_true", help="Regenerate even if cached for this resume+job pair")
     tailor_docx_parser.set_defaults(func=_cmd_tailor_docx)
+
+    migrate_legacy_tailoring_parser = subparsers.add_parser(
+        "migrate-legacy-tailoring",
+        help=(
+            "One-time migration: back up DB-resident tailored text to .txt files, and rename "
+            "old-format company-only-keyed docx files to job_id-keyed names where unambiguous"
+        ),
+    )
+    migrate_legacy_tailoring_parser.add_argument("--db", default=DEFAULT_DB, help="Jobs SQLite db path")
+    migrate_legacy_tailoring_parser.add_argument(
+        "--out-dir", default=DEFAULT_TAILOR_OUT_DIR, help="Directory for legacy .txt backups (same default as `tailor`)"
+    )
+    migrate_legacy_tailoring_parser.add_argument(
+        "--generated-cv-dir", default=DEFAULT_GENERATED_CV_DIR, help="Directory containing generated_cv/<company>/ old-format docx files"
+    )
+    migrate_legacy_tailoring_parser.set_defaults(func=_cmd_migrate_legacy_tailoring)
 
     add_contact_parser = subparsers.add_parser(
         "add-contact", help="Add a contact you found yourself (LinkedIn, Apollo.io, etc.) for a job"
