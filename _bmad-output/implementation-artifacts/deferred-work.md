@@ -9,6 +9,8 @@
 - source_spec: none
   summary: Add a `requirements.txt` (with `-e .`) so this app can be deployed to Streamlit Community Cloud, which doesn't use `uv`.
   evidence: Split from a combined "prep for Streamlit Cloud deployment" intent on 2026-07-11 — independently shippable, no coupling to the tailoring-storage change or the Admin page, deferred in favor of tackling the higher-risk tailoring-storage change first.
+  status: done 2026-07-12
+  resolution: Implemented via `_bmad-output/implementation-artifacts/spec-requirements-txt-streamlit-cloud.md` — added a one-line `requirements.txt` (`-e .`); verified with a clean `pip install -r requirements.txt` in an isolated venv (no `uv`) that it correctly builds and installs the app plus all dependencies. Documented in README. Review surfaced two new deploy-readiness gaps (secrets bridging, dependency-pinning drift), logged as separate deferred entries above — the requirements.txt file itself is complete and working.
 
 - source_spec: none
   summary: Add an "Admin" Streamlit page with (a) CV upload -> `resume.extract`/`resume.db` profile registration and (b) a sponsor-register-ingest button calling `register.ingest.ingest(...)` — needed because Streamlit Cloud has no shell access and `data/`/`cv/`/`.env` are gitignored, so a fresh cloud deploy starts empty.
@@ -35,3 +37,11 @@
   evidence: Discovered 2026-07-12 while committing the tailored-content-file-only-storage spec's implementation — `data/tailored/1_resume.txt`/`1_cover_letter.txt` (real personal content, written by this session's `migrate-legacy-tailoring` run) showed up as untracked (`??`) rather than ignored. Deliberately left out of that commit; `.gitignore` should add `data/tailored/` (or a broader `data/` pattern) before any future `git add` in this area.
   status: done 2026-07-12
   resolution: Added `data/tailored/` to `.gitignore`; confirmed via `git status` that the directory no longer shows as untracked.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-requirements-txt-streamlit-cloud.md`
+  summary: On a real Streamlit Community Cloud deploy, `app.py`'s `load_dotenv()` will silently no-op (no `.env` file ships to Cloud) and `GEMINI_API_KEY` will be `None` — Cloud delivers secrets via `st.secrets`, not `os.environ`, and nothing in the codebase bridges the two.
+  evidence: Flagged in the adversarial review (2026-07-12) of the `requirements.txt` one-shot change. `requirements.txt` only fixes the *build* step; every Gemini-calling code path (`jobs/extract.py`, `jobs/tailor.py`, `jobs/outreach.py`) would still fail at the first LLM call on a fresh Cloud deploy without this fix.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-requirements-txt-streamlit-cloud.md`
+  summary: `requirements.txt` uses a floating `-e .` install (pip resolves fresh against `pyproject.toml`'s loose version floors) rather than a frozen list generated from `uv.lock`, so Streamlit Cloud can silently resolve a different dependency graph than what's tested locally — and nothing detects that drift since this repo intentionally has no CI.
+  evidence: Flagged in the adversarial review (2026-07-12) of the `requirements.txt` one-shot change. A deliberate trade-off for now (matches the deferred-work item's original "-e ." instruction and this project's no-CI-by-design convention), but worth revisiting if a Cloud deploy ever breaks from an unexpected dependency bump.

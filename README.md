@@ -41,6 +41,12 @@ uv run streamlit run app.py
 
 This opens the Streamlit UI: paste a job posting in, review the roadmap, or browse the tracked jobs list.
 
+### Deploying to Streamlit Community Cloud
+
+`requirements.txt` (a single `-e .` line) exists only for Streamlit Community Cloud, which installs with plain `pip` and doesn't understand `uv`/`uv.lock`. It reads dependencies straight from `pyproject.toml` via an editable install. `uv.lock` remains the source of truth for local development; `requirements.txt` is not kept in lockstep with it, so Cloud may resolve slightly newer dependency versions than what's tested locally.
+
+This alone does not make the app fully functional on Cloud — secrets (`GEMINI_API_KEY`) and local state (`data/*.db`, `cv/`) still need addressing; see `_bmad-output/implementation-artifacts/deferred-work.md`.
+
 ## CLI tools
 
 Each domain area also has a standalone CLI, useful for one-off tasks (e.g. re-importing the register) without opening the UI:
