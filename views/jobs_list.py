@@ -11,7 +11,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from jobs.cli import DEFAULT_GENERATED_CV_DIR, _resolve_contact, _tailored_docx_paths
+from jobs.cli import DEFAULT_GENERATED_CV_DIR, _read_outreach_message_text, _resolve_contact, _tailored_docx_paths
 from jobs.db import connect as connect_jobs
 from jobs.db import get_job, list_applied_jobs, mark_applied, mark_discarded, mark_reminders_sent_through
 from jobs.outreach import EMAIL, LINKEDIN_NOTE, OutreachLengthError
@@ -392,7 +392,13 @@ else:
                 for msg in past_messages:
                     channel_label = CHANNEL_LABELS.get(msg["channel"], msg["channel"])
                     st.caption(f"{msg['created_at'][:10]} - {channel_label} to {msg['contact_name']} ({msg['char_count']} chars)")
-                    st.text(msg["message"])
+                    message_text = _read_outreach_message_text(
+                        job["company_name"], job["id"], msg["channel"], msg["id"], DEFAULT_GENERATED_CV_DIR
+                    )
+                    if message_text is not None:
+                        st.text(message_text)
+                    else:
+                        st.caption("(message file not found)")
                     st.divider()
 
         with st.expander("Raw posting text"):

@@ -29,7 +29,6 @@ CREATE TABLE IF NOT EXISTS outreach_messages (
     contact_id INTEGER,
     contact_name TEXT NOT NULL,
     channel TEXT NOT NULL,
-    message TEXT NOT NULL,
     char_count INTEGER NOT NULL,
     created_at TEXT NOT NULL
 );
@@ -79,13 +78,19 @@ def insert_outreach_message(
     channel: str,
     message: str,
 ) -> int:
+    """`message` is never stored in the DB - the full drafted text now lives
+    only as a file on disk (see `jobs.cli._outreach_message_path`), written
+    by the caller right after this returns the new row id (needed for the
+    filename). `message` stays a required parameter purely so `char_count`
+    can be computed here, matching the value the caller is about to write
+    to file."""
     with conn:
         cursor = conn.execute(
             """
-            INSERT INTO outreach_messages (job_id, contact_id, contact_name, channel, message, char_count, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO outreach_messages (job_id, contact_id, contact_name, channel, char_count, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (job_id, contact_id, contact_name, channel, message, len(message), datetime.now(timezone.utc).isoformat()),
+            (job_id, contact_id, contact_name, channel, len(message), datetime.now(timezone.utc).isoformat()),
         )
     return cursor.lastrowid
 
@@ -94,3 +99,34 @@ def list_outreach_messages(conn: sqlite3.Connection, job_id: int) -> list[sqlite
     return conn.execute(
         "SELECT * FROM outreach_messages WHERE job_id = ? ORDER BY id DESC", (job_id,)
     ).fetchall()
+
+
+def list_legacy_outreach_message_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Rows with pre-existing DB-resident message text from before this app
+    stopped writing it. A fresh DB (created after this change) never gets
+    the `message` column at all - it's no longer part of SCHEMA. Guard via
+    `PRAGMA table_info` before querying it: querying a column that doesn't
+    exist on a fresh DB is a hard sqlite3 error, not an empty result."""
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(outreach_messages)")}
+    if "message" not in existing:
+        return []
+    return conn.execute(
+        """
+        SELECT om.id, om.job_id, om.channel, om.message, j.company_name
+        FROM outreach_messages om
+        LEFT JOIN jobs j ON j.id = om.job_id
+        WHERE om.message IS NOT NULL
+        """
+    ).fetchall()
+
+
+def drop_legacy_message_column(conn: sqlite3.Connection) -> None:
+    """Drops the legacy `message` column once its text has been backed up
+    to disk (see `jobs.cli._migrate_legacy_outreach_text`). Guarded via
+    `PRAGMA table_info` the same way as `list_legacy_outreach_message_rows`
+    - a safe no-op against a fresh DB that never had the column."""
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(outreach_messages)")}
+    if "message" not in existing:
+        return
+    with conn:
+        conn.execute("ALTER TABLE outreach_messages DROP COLUMN message")

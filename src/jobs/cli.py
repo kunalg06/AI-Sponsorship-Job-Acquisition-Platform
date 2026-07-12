@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sqlite3
 import sys
 import urllib.error
 from dataclasses import dataclass
@@ -44,10 +45,12 @@ from jobs.outreach_db import (
     ensure_schema as ensure_outreach_schema,
 )
 from jobs.outreach_db import (
+    drop_legacy_message_column,
     get_contact,
     insert_contact,
     insert_outreach_message,
     list_contacts,
+    list_legacy_outreach_message_rows,
 )
 from jobs.salary_check import MEETS_THRESHOLD, check_salary_threshold
 from jobs.sponsor_check import CONFIRMED, FUZZY_MATCH, USER_CONFIRMED, check_sponsor_status
@@ -381,6 +384,30 @@ def _tailored_docx_paths(company_name: Optional[str], job_id: int, out_dir: str)
     return company_dir / f"{job_id}_resume.docx", company_dir / f"{job_id}_cover_letter.docx"
 
 
+def _outreach_message_path(company_name: Optional[str], job_id: int, channel: str, message_id: int, out_dir: str) -> Path:
+    """job_id- AND message_id-keyed outreach message file path -
+    `outreach_messages` is an insert-only history table (multiple drafts
+    per job/channel, e.g. to different contacts), unlike the job_id-only
+    keying used for tailored resume/cover-letter output, so the message id
+    must be part of the filename too or a second draft to the same job+
+    channel would silently overwrite the first one's file."""
+    company_dir = Path(out_dir) / _company_slug(company_name, job_id)
+    return company_dir / f"{job_id}_outreach_{channel}_{message_id}.txt"
+
+
+def _read_outreach_message_text(
+    company_name: Optional[str], job_id: int, channel: str, message_id: int, out_dir: str
+) -> Optional[str]:
+    """Read a past drafted outreach message back off disk for display (the
+    "Message history" expander in `views/jobs_list.py`/`views/intake.py`) -
+    `None` if the file isn't there (moved/deleted externally), letting the
+    caller show a fallback instead of crashing."""
+    path = _outreach_message_path(company_name, job_id, channel, message_id, out_dir)
+    if not path.exists():
+        return None
+    return path.read_text(encoding="utf-8")
+
+
 def _find_source_resume_docx(directory: str) -> Path:
     dir_path = Path(directory)
     candidates = sorted(dir_path.glob("*.docx"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -616,6 +643,47 @@ def _cmd_migrate_legacy_tailoring(args: argparse.Namespace) -> None:
         conn.close()
 
 
+def _migrate_legacy_outreach_text(conn, out_dir: str) -> None:
+    """Back up any pre-existing DB-resident outreach message text (from
+    before `insert_outreach_message` stopped writing it) to `.txt` files,
+    matching `_outreach_message_path`'s own output convention. Idempotent:
+    skips a file that's already there."""
+    rows = list_legacy_outreach_message_rows(conn)
+    if not rows:
+        print("No legacy DB-resident outreach message text found - nothing to do.")
+        return
+
+    wrote_any = False
+    for row in rows:
+        path = _outreach_message_path(row["company_name"], row["job_id"], row["channel"], row["id"], out_dir)
+        if path.exists():
+            continue
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(row["message"], encoding="utf-8")
+        except OSError as exc:
+            print(f"  Warning: failed to back up message #{row['id']} to {path}: {exc}")
+            continue
+        print(f"  Wrote {path}")
+        wrote_any = True
+
+    if not wrote_any:
+        print("Legacy DB-resident outreach message text already backed up to disk - nothing to do.")
+
+
+def _cmd_migrate_legacy_outreach(args: argparse.Namespace) -> None:
+    """One-time, idempotent migration: back up any DB-resident outreach
+    message text to `.txt` files, then drop the now-unused `message` column
+    (required before new inserts can succeed against a pre-existing table).
+    Safe to re-run - a fresh DB that never had the column is a no-op."""
+    conn = connect(args.db)
+    try:
+        _migrate_legacy_outreach_text(conn, args.out_dir)
+        drop_legacy_message_column(conn)
+    finally:
+        conn.close()
+
+
 def _cmd_add_contact(args: argparse.Namespace) -> None:
     conn = connect(args.db)
     try:
@@ -682,7 +750,17 @@ def _load_resume_and_narrative(profile_db: str):
     return raw_resume_text, narrative_core
 
 
-def _draft_and_store_outreach(conn, job, channel: str, contact_id, contact_name, contact_title, purpose: Optional[str], profile_db: str):
+def _draft_and_store_outreach(
+    conn,
+    job,
+    channel: str,
+    contact_id,
+    contact_name,
+    contact_title,
+    purpose: Optional[str],
+    profile_db: str,
+    out_dir: str = DEFAULT_GENERATED_CV_DIR,
+):
     raw_resume_text, narrative_core = _load_resume_and_narrative(profile_db)
 
     try:
@@ -702,9 +780,18 @@ def _draft_and_store_outreach(conn, job, channel: str, contact_id, contact_name,
         print(f"  {exc.draft_text}")
         return None
 
-    insert_outreach_message(
-        conn, job["id"], contact_id=contact_id, contact_name=contact_name, channel=channel, message=draft.message
-    )
+    try:
+        message_id = insert_outreach_message(
+            conn, job["id"], contact_id=contact_id, contact_name=contact_name, channel=channel, message=draft.message
+        )
+    except sqlite3.IntegrityError:
+        raise SystemExit(
+            "This jobs.db has a pre-existing outreach_messages table from before message text moved to disk - "
+            "run `migrate-legacy-outreach` first."
+        )
+    path = _outreach_message_path(job["company_name"], job["id"], channel, message_id, out_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(draft.message, encoding="utf-8")
 
     print(f"Job #{job['id']}: {channel} draft for {contact_name} ({len(draft.message)} chars)")
     print("  ---")
@@ -721,7 +808,9 @@ def _cmd_outreach(args: argparse.Namespace) -> None:
             raise SystemExit(f"No job #{args.job_id} found in {args.db}")
 
         contact_id, contact_name, contact_title = _resolve_contact(conn, job, args.contact_id)
-        _draft_and_store_outreach(conn, job, args.channel, contact_id, contact_name, contact_title, args.purpose, args.profile_db)
+        _draft_and_store_outreach(
+            conn, job, args.channel, contact_id, contact_name, contact_title, args.purpose, args.profile_db, args.out_dir
+        )
     finally:
         conn.close()
 
@@ -801,7 +890,15 @@ def _cmd_follow_up(args: argparse.Namespace) -> None:
 
         contact_id, contact_name, contact_title = _resolve_contact(conn, job, args.contact_id)
         draft = _draft_and_store_outreach(
-            conn, job, args.channel, contact_id, contact_name, contact_title, args.purpose or default_purpose, args.profile_db
+            conn,
+            job,
+            args.channel,
+            contact_id,
+            contact_name,
+            contact_title,
+            args.purpose or default_purpose,
+            args.profile_db,
+            args.out_dir,
         )
 
         if draft is not None and milestone is not None:
@@ -952,6 +1049,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     migrate_legacy_tailoring_parser.set_defaults(func=_cmd_migrate_legacy_tailoring)
 
+    migrate_legacy_outreach_parser = subparsers.add_parser(
+        "migrate-legacy-outreach",
+        help="One-time migration: back up DB-resident outreach message text to .txt files, then drop the legacy column",
+    )
+    migrate_legacy_outreach_parser.add_argument("--db", default=DEFAULT_DB, help="Jobs SQLite db path")
+    migrate_legacy_outreach_parser.add_argument(
+        "--out-dir", default=DEFAULT_GENERATED_CV_DIR, help="Directory for legacy outreach message .txt backups"
+    )
+    migrate_legacy_outreach_parser.set_defaults(func=_cmd_migrate_legacy_outreach)
+
     add_contact_parser = subparsers.add_parser(
         "add-contact", help="Add a contact you found yourself (LinkedIn, Apollo.io, etc.) for a job"
     )
@@ -977,6 +1084,7 @@ def build_parser() -> argparse.ArgumentParser:
     outreach_parser.add_argument("--purpose", help="e.g. 'ask who the redacted client is' - defaults to expressing interest")
     outreach_parser.add_argument("--db", default=DEFAULT_DB, help="Jobs SQLite db path")
     outreach_parser.add_argument("--profile-db", default=DEFAULT_PROFILE_DB, help="Candidate profile SQLite db path")
+    outreach_parser.add_argument("--out-dir", default=DEFAULT_GENERATED_CV_DIR, help="Directory to write the drafted message .txt file into")
     outreach_parser.set_defaults(func=_cmd_outreach)
 
     mark_applied_parser = subparsers.add_parser("mark-applied", help="Mark a job applied and start its reminder clock")
@@ -1003,6 +1111,7 @@ def build_parser() -> argparse.ArgumentParser:
     follow_up_parser.add_argument("--force", action="store_true", help="Draft even if no reminder is currently due")
     follow_up_parser.add_argument("--db", default=DEFAULT_DB, help="Jobs SQLite db path")
     follow_up_parser.add_argument("--profile-db", default=DEFAULT_PROFILE_DB, help="Candidate profile SQLite db path")
+    follow_up_parser.add_argument("--out-dir", default=DEFAULT_GENERATED_CV_DIR, help="Directory to write the drafted message .txt file into")
     follow_up_parser.set_defaults(func=_cmd_follow_up)
 
     set_employer_parser = subparsers.add_parser(

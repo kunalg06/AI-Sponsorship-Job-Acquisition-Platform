@@ -18,13 +18,16 @@ import docx
 import pytest
 
 import jobs.cli as jobs_cli
-from jobs.cli import _sanitize_filename, _tailored_docx_paths, build_parser
+from jobs.cli import _outreach_message_path, _sanitize_filename, _tailored_docx_paths, build_parser
 from jobs.db import connect as connect_jobs
 from jobs.db import get_job, insert_job
 from jobs.extract import JobExtraction
+from jobs.outreach import EMAIL, LINKEDIN_NOTE, OutreachDraft
+from jobs.outreach_db import ensure_schema as ensure_outreach_schema
+from jobs.outreach_db import list_outreach_messages
 from jobs.tailor import TailoredApplication
 from resume.db import connect as connect_profile
-from resume.db import insert_profile
+from resume.db import insert_narrative, insert_profile
 from resume.extract import ResumeProfile
 
 RESUME_TEXT = "Jane Doe - Senior Backend Engineer. 5 years Python. No GitHub link in this resume."
@@ -558,3 +561,271 @@ def test_migrate_legacy_tailoring_continues_after_oserror_renaming_one_folder(tm
 
     assert (good_dir / f"{good_job_id}_resume.docx").exists()
     assert (good_dir / f"{good_job_id}_cover_letter.docx").exists()
+
+
+# --------------------------------------------------------------------------
+# `outreach` - drafted message text is written to a file, not stored in the DB
+# --------------------------------------------------------------------------
+
+
+def _add_narrative_and_profile(profile_db_path: Path) -> None:
+    _add_profile_version(profile_db_path, RESUME_TEXT)
+    conn = connect_profile(profile_db_path)
+    try:
+        insert_narrative(conn, "Why AI, why UK, why them - the candidate's narrative core.")
+    finally:
+        conn.close()
+
+
+@pytest.fixture
+def outreach_env(tmp_path, monkeypatch):
+    """A ready-to-use jobs.db (one job with a recruiter) + profile.db (resume
+    + narrative core), with `draft_outreach_message` monkeypatched so tests
+    can assert on the file it writes without hitting a real Gemini API."""
+    jobs_db = tmp_path / "jobs.db"
+    profile_db = tmp_path / "profile.db"
+    out_dir = tmp_path / "generated_cv"
+
+    conn = connect_jobs(jobs_db)
+    try:
+        job_id = insert_job(
+            conn,
+            "job posting text",
+            JobExtraction(
+                job_title="AI Engineer",
+                company_name="Bending Spoons",
+                is_agency_posting=False,
+                recruiter_name="Sarah Cole",
+                recruiter_contact="sarah@bendingspoons.com",
+            ),
+        )
+    finally:
+        conn.close()
+
+    _add_narrative_and_profile(profile_db)
+
+    draft_calls = MagicMock(return_value=OutreachDraft(message="Hi Sarah, I'd love to chat about the AI Engineer role."))
+    monkeypatch.setattr(jobs_cli, "draft_outreach_message", draft_calls)
+
+    return {
+        "jobs_db": jobs_db,
+        "profile_db": profile_db,
+        "out_dir": out_dir,
+        "job_id": job_id,
+        "draft_calls": draft_calls,
+    }
+
+
+def test_cmd_outreach_writes_the_expected_txt_file_and_stores_no_message_column(outreach_env):
+    argv = [
+        "outreach",
+        str(outreach_env["job_id"]),
+        "--channel",
+        LINKEDIN_NOTE,
+        "--db",
+        str(outreach_env["jobs_db"]),
+        "--profile-db",
+        str(outreach_env["profile_db"]),
+        "--out-dir",
+        str(outreach_env["out_dir"]),
+    ]
+
+    _run(argv)
+
+    conn = connect_jobs(outreach_env["jobs_db"])
+    try:
+        ensure_outreach_schema(conn)
+        messages = list_outreach_messages(conn, outreach_env["job_id"])
+    finally:
+        conn.close()
+
+    assert len(messages) == 1
+    message_row = messages[0]
+    assert "message" not in message_row.keys()
+    assert message_row["char_count"] == len("Hi Sarah, I'd love to chat about the AI Engineer role.")
+
+    path = _outreach_message_path(
+        "Bending Spoons", outreach_env["job_id"], LINKEDIN_NOTE, message_row["id"], str(outreach_env["out_dir"])
+    )
+    assert path.exists()
+    assert path.read_text(encoding="utf-8") == "Hi Sarah, I'd love to chat about the AI Engineer role."
+
+
+def test_cmd_outreach_second_draft_to_same_job_and_channel_gets_its_own_file(outreach_env):
+    """`outreach_messages` is an insert-only history table - a second draft
+    to the same job+channel (e.g. to a different contact) must not
+    overwrite the first draft's file."""
+    argv = [
+        "outreach",
+        str(outreach_env["job_id"]),
+        "--channel",
+        LINKEDIN_NOTE,
+        "--db",
+        str(outreach_env["jobs_db"]),
+        "--profile-db",
+        str(outreach_env["profile_db"]),
+        "--out-dir",
+        str(outreach_env["out_dir"]),
+    ]
+
+    _run(argv)
+    outreach_env["draft_calls"].return_value = OutreachDraft(message="A completely different second draft.")
+    _run(argv)
+
+    conn = connect_jobs(outreach_env["jobs_db"])
+    try:
+        ensure_outreach_schema(conn)
+        messages = list_outreach_messages(conn, outreach_env["job_id"])
+    finally:
+        conn.close()
+
+    assert len(messages) == 2
+    paths = [
+        _outreach_message_path("Bending Spoons", outreach_env["job_id"], LINKEDIN_NOTE, row["id"], str(outreach_env["out_dir"]))
+        for row in messages
+    ]
+    assert paths[0] != paths[1]
+    assert all(p.exists() for p in paths)
+
+
+# --------------------------------------------------------------------------
+# `migrate-legacy-outreach`
+# --------------------------------------------------------------------------
+
+
+def _add_legacy_outreach_message_column_with_text(jobs_db_path: Path, job_id: int, channel: str, message: str) -> int:
+    """Simulate a jobs.db created before this refactor: `outreach_messages`
+    still has a real `message` column with real data (only a one-time
+    migration drops it - schema application never does)."""
+    conn = sqlite3.connect(jobs_db_path)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS outreach_messages (
+            id INTEGER PRIMARY KEY,
+            job_id INTEGER NOT NULL,
+            contact_id INTEGER,
+            contact_name TEXT NOT NULL,
+            channel TEXT NOT NULL,
+            message TEXT NOT NULL,
+            char_count INTEGER NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    cursor = conn.execute(
+        """
+        INSERT INTO outreach_messages (job_id, contact_id, contact_name, channel, message, char_count, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (job_id, None, "Sarah Cole", channel, message, len(message), "2026-01-01T00:00:00+00:00"),
+    )
+    conn.commit()
+    message_id = cursor.lastrowid
+    conn.close()
+    return message_id
+
+
+def test_migrate_legacy_outreach_writes_txt_from_legacy_db_text_and_is_idempotent(tmp_path):
+    jobs_db = tmp_path / "jobs.db"
+    job_id = _make_job(jobs_db, company_name="Bending Spoons")
+    message_id = _add_legacy_outreach_message_column_with_text(jobs_db, job_id, LINKEDIN_NOTE, "LEGACY MESSAGE TEXT")
+
+    out_dir = tmp_path / "generated_cv"
+    argv = ["migrate-legacy-outreach", "--db", str(jobs_db), "--out-dir", str(out_dir)]
+
+    _run(argv)
+
+    path = _outreach_message_path("Bending Spoons", job_id, LINKEDIN_NOTE, message_id, str(out_dir))
+    assert path.read_text(encoding="utf-8") == "LEGACY MESSAGE TEXT"
+
+    conn = sqlite3.connect(jobs_db)
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(outreach_messages)")}
+    conn.close()
+    assert "message" not in existing
+
+    _run(argv)  # idempotent - column already dropped, file already written, no error
+    assert path.read_text(encoding="utf-8") == "LEGACY MESSAGE TEXT"
+
+
+def test_migrate_legacy_outreach_on_a_fresh_db_is_a_no_op(tmp_path, capsys):
+    jobs_db = tmp_path / "jobs.db"
+    _make_job(jobs_db, company_name="Acme AI")
+
+    out_dir = tmp_path / "generated_cv"
+    argv = ["migrate-legacy-outreach", "--db", str(jobs_db), "--out-dir", str(out_dir)]
+
+    _run(argv)  # must not raise
+
+    captured = capsys.readouterr()
+    assert "nothing to do" in captured.out.lower()
+
+
+def test_migrate_legacy_outreach_then_new_insert_succeeds(tmp_path):
+    """The whole point of dropping the column: a subsequent draft insert
+    must succeed against the migrated table (a `message NOT NULL` legacy
+    column left in place would break inserts that no longer supply it)."""
+    jobs_db = tmp_path / "jobs.db"
+    job_id = _make_job(jobs_db, company_name="Bending Spoons")
+    _add_legacy_outreach_message_column_with_text(jobs_db, job_id, LINKEDIN_NOTE, "LEGACY MESSAGE TEXT")
+
+    out_dir = tmp_path / "generated_cv"
+    _run(["migrate-legacy-outreach", "--db", str(jobs_db), "--out-dir", str(out_dir)])
+
+    from jobs.outreach_db import insert_outreach_message
+
+    conn = connect_jobs(jobs_db)
+    try:
+        ensure_outreach_schema(conn)
+        new_id = insert_outreach_message(
+            conn, job_id, contact_id=None, contact_name="New Contact", channel=EMAIL, message="A brand new message."
+        )
+        assert new_id is not None
+    finally:
+        conn.close()
+
+
+def test_drafting_against_an_unmigrated_legacy_db_raises_a_friendly_error_naming_the_migration_command(
+    tmp_path, monkeypatch
+):
+    """Without `migrate-legacy-outreach` having been run, the pre-existing
+    `message NOT NULL` column would otherwise surface as a raw, unactionable
+    `sqlite3.IntegrityError` - this must instead point the user at the fix."""
+    jobs_db = tmp_path / "jobs.db"
+    profile_db = tmp_path / "profile.db"
+    conn = connect_jobs(jobs_db)
+    try:
+        job_id = insert_job(
+            conn,
+            "job posting text",
+            JobExtraction(
+                job_title="AI Engineer",
+                company_name="Bending Spoons",
+                is_agency_posting=False,
+                recruiter_name="Sarah Cole",
+                recruiter_contact="sarah@bendingspoons.com",
+            ),
+        )
+    finally:
+        conn.close()
+    _add_legacy_outreach_message_column_with_text(jobs_db, job_id, LINKEDIN_NOTE, "LEGACY MESSAGE TEXT")
+    _add_narrative_and_profile(profile_db)
+
+    monkeypatch.setattr(
+        jobs_cli, "draft_outreach_message", MagicMock(return_value=OutreachDraft(message="A brand new draft."))
+    )
+
+    with pytest.raises(SystemExit, match="migrate-legacy-outreach"):
+        _run(
+            [
+                "outreach",
+                str(job_id),
+                "--channel",
+                LINKEDIN_NOTE,
+                "--db",
+                str(jobs_db),
+                "--profile-db",
+                str(profile_db),
+                "--out-dir",
+                str(tmp_path / "generated_cv"),
+            ]
+        )

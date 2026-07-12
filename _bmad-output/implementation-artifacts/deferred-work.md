@@ -84,3 +84,11 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-admin-cv-upload-resume-registration.md`
   summary: No confirmation or warning before a new CV upload supersedes the currently "latest" profile — since match-scoring/tailoring always reads `get_latest_profile` (latest wins), uploading a new CV silently changes behavior for every job already in the pipeline.
   evidence: Flagged in adversarial review of the CV-upload spec (2026-07-12). Same theme as the already-logged "no confirmation before destructive sponsor-register replace" item above — a UX design decision, not a trivial patch.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-outreach-file-only-storage.md`
+  summary: The CLI's `outreach`/`follow-up` commands accept a `--out-dir` override for where the drafted message `.txt` file is written, but the Streamlit UI (`views/jobs_list.py`, `views/intake.py`, `jobs/ui_actions.py`) always reads/writes at the hardcoded `DEFAULT_GENERATED_CV_DIR` — a message drafted via the CLI with a custom `--out-dir` will show as "(message file not found)" in the UI's Message-history expander.
+  evidence: Flagged by both reviewers of the outreach-file-storage spec (2026-07-12). Same class of gap the tailored-resume/cover-letter feature already has (the UI never exposes an out-dir override either) — not new to this diff's design, just inherited.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-outreach-file-only-storage.md`
+  summary: If the `.txt` file write fails after `insert_outreach_message`'s DB commit (disk full, permission denied), the metadata row persists with a `char_count` but the actual message text is permanently lost with no warning surfaced anywhere.
+  evidence: Flagged by the edge-case reviewer of the outreach-file-storage spec (2026-07-12). Same systemic "no atomic write / no rollback" gap as the already-logged "`.txt`/`.docx` write paths in `jobs/cli.py` don't use temp-file-then-rename" item above — not specific to this diff.

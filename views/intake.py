@@ -9,7 +9,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from jobs.cli import DEFAULT_GENERATED_CV_DIR, _tailored_docx_paths
+from jobs.cli import DEFAULT_GENERATED_CV_DIR, _read_outreach_message_text, _tailored_docx_paths
 from jobs.db import connect as connect_jobs
 from jobs.db import get_job, insert_job, mark_applied, mark_discarded, update_match_verdict, update_salary_verdict, update_sponsor_verdict
 from jobs.extract import extract_job
@@ -473,7 +473,13 @@ if extraction:
                         for msg in past_messages:
                             channel_label = CHANNEL_LABELS.get(msg["channel"], msg["channel"])
                             st.caption(f"{msg['created_at'][:10]} - {channel_label} to {msg['contact_name']} ({msg['char_count']} chars)")
-                            st.text(msg["message"])
+                            message_text = _read_outreach_message_text(
+                                saved_job["company_name"], saved_job_id, msg["channel"], msg["id"], DEFAULT_GENERATED_CV_DIR
+                            )
+                            if message_text is not None:
+                                st.text(message_text)
+                            else:
+                                st.caption("(message file not found)")
                             st.divider()
 
                 st.divider()

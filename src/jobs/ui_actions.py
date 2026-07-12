@@ -10,6 +10,7 @@ action for any stored job.
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 from typing import Optional
 
@@ -17,6 +18,7 @@ from jobs.cli import (
     DEFAULT_GENERATED_CV_DIR,
     DEFAULT_SOURCE_RESUME_DIR,
     _load_resume_and_narrative,
+    _outreach_message_path,
     _require_raw_resume_text,
     _tailor_docx_for_job,
 )
@@ -83,9 +85,18 @@ def draft_and_save_outreach(
             purpose=purpose,
         )
         ensure_outreach_schema(jobs_conn)
-        insert_outreach_message(
-            jobs_conn, job_id, contact_id=contact_id, contact_name=contact_name, channel=channel, message=draft.message
-        )
+        try:
+            message_id = insert_outreach_message(
+                jobs_conn, job_id, contact_id=contact_id, contact_name=contact_name, channel=channel, message=draft.message
+            )
+        except sqlite3.IntegrityError:
+            raise SystemExit(
+                "This jobs.db has a pre-existing outreach_messages table from before message text moved to disk - "
+                "run `uv run python -m jobs.cli migrate-legacy-outreach` first."
+            )
+        path = _outreach_message_path(job["company_name"], job_id, channel, message_id, DEFAULT_GENERATED_CV_DIR)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(draft.message, encoding="utf-8")
         return draft
     finally:
         jobs_conn.close()
