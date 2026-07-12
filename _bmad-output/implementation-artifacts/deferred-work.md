@@ -41,6 +41,12 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-requirements-txt-streamlit-cloud.md`
   summary: On a real Streamlit Community Cloud deploy, `app.py`'s `load_dotenv()` will silently no-op (no `.env` file ships to Cloud) and `GEMINI_API_KEY` will be `None` — Cloud delivers secrets via `st.secrets`, not `os.environ`, and nothing in the codebase bridges the two.
   evidence: Flagged in the adversarial review (2026-07-12) of the `requirements.txt` one-shot change. `requirements.txt` only fixes the *build* step; every Gemini-calling code path (`jobs/extract.py`, `jobs/tailor.py`, `jobs/outreach.py`) would still fail at the first LLM call on a fresh Cloud deploy without this fix.
+  status: done 2026-07-12
+  resolution: `app.py` now bridges `st.secrets["GEMINI_API_KEY"]` into `os.environ` on startup when not already set (env/`.env` always wins if present); swallows the case where no secrets source exists at all (expected for local dev), and prints a stderr diagnostic if the key is still missing after all sources are checked. Verified manually against a real `st.secrets` object (temporary `.streamlit/secrets.toml`, now gitignored) in both the present and absent cases. 153/153 tests still passing (no existing test covers `app.py` itself — see the new deferred entry below on why that's out of scope for this fix).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-gemini-api-key-secrets-bridge.md`
+  summary: The `GEMINI_API_KEY` secrets-bridging logic in `app.py` has no automated test — `app.py` executes `st.set_page_config`/`st.navigation`/`pg.run()` as a side effect of module import, so a plain pytest import would run the whole page router, not just the bridging logic.
+  evidence: Flagged in adversarial review (2026-07-12) of the secrets-bridge fix. Fixing it means deciding where the bridging logic should live to be independently testable (e.g. extracting it into a small importable helper module) — a real design decision, not a trivial patch, and `app.py`/`views/*.py` have no existing test coverage or testing pattern to follow in this codebase today.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-requirements-txt-streamlit-cloud.md`
   summary: `requirements.txt` uses a floating `-e .` install (pip resolves fresh against `pyproject.toml`'s loose version floors) rather than a frozen list generated from `uv.lock`, so Streamlit Cloud can silently resolve a different dependency graph than what's tested locally — and nothing detects that drift since this repo intentionally has no CI.

@@ -5,10 +5,35 @@ Run with: uv run streamlit run app.py
 
 from __future__ import annotations
 
+import os
+import sys
+
 import streamlit as st
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# On Streamlit Community Cloud there is no .env file, so load_dotenv() above
+# is a no-op - secrets are delivered via st.secrets instead. Bridge it into
+# os.environ (the only place genai.Client() and other os.getenv()-based
+# lookups check) so the rest of the pipeline doesn't need to know which
+# environment it's running in. st.secrets raises if no secrets.toml/directory
+# exists anywhere (e.g. local dev using only .env) - that's expected, not an
+# error, so it's swallowed the same way load_dotenv() silently no-ops when
+# .env is missing. A real environment variable / .env value always wins over
+# st.secrets if both are somehow set.
+if "GEMINI_API_KEY" not in os.environ:
+    try:
+        os.environ["GEMINI_API_KEY"] = st.secrets["GEMINI_API_KEY"]
+    except Exception:
+        pass
+
+if "GEMINI_API_KEY" not in os.environ:
+    print(
+        "GEMINI_API_KEY not found in the environment, .env, or st.secrets - "
+        "Gemini calls will fail until one of these is configured.",
+        file=sys.stderr,
+    )
 
 st.set_page_config(page_title="Sponsorship Job Assistant", page_icon="\U0001f9ed", layout="centered")
 

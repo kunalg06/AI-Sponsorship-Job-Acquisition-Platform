@@ -45,7 +45,9 @@ This opens the Streamlit UI: paste a job posting in, review the roadmap, or brow
 
 `requirements.txt` (a single `-e .` line) exists only for Streamlit Community Cloud, which installs with plain `pip` and doesn't understand `uv`/`uv.lock`. It reads dependencies straight from `pyproject.toml` via an editable install. `uv.lock` remains the source of truth for local development; `requirements.txt` is not kept in lockstep with it, so Cloud may resolve slightly newer dependency versions than what's tested locally.
 
-This alone does not make the app fully functional on Cloud — secrets (`GEMINI_API_KEY`) and local state (`data/*.db`, `cv/`) still need addressing; see `_bmad-output/implementation-artifacts/deferred-work.md`.
+`app.py` bridges `GEMINI_API_KEY` from Cloud's Secrets UI (`st.secrets`) into `os.environ` on startup, since `genai.Client()` only reads the latter — set the key under **Settings → Secrets** in the Cloud app dashboard (as `GEMINI_API_KEY = "..."`). A local `.env`/real environment variable always takes precedence over `st.secrets` if both happen to be set.
+
+Local state (`data/*.db`, `cv/`) still needs addressing separately — see `_bmad-output/implementation-artifacts/deferred-work.md`.
 
 ## CLI tools
 

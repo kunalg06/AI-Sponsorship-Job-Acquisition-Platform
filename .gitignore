@@ -1,5 +1,6 @@
 # Secrets
 .env
+.streamlit/secrets.toml
 
 # Local runtime state (SQLite DBs, personal data)
 data/*.db
