@@ -72,3 +72,15 @@
 - source_spec: none
   summary: `st.error(str(exc))` — used identically across every view in this codebase, including the new Admin page — can render a blank error box for any exception whose `str()` happens to be empty (e.g. some `OSError`/`HTTPError` subclasses), giving the user no information about what went wrong.
   evidence: Flagged by the edge-case reviewer of the Admin-page spec (2026-07-12) but applies identically everywhere this pattern is already used (`views/intake.py`, `views/jobs_list.py`), so it's a systemic, pre-existing pattern rather than something specific to any one diff.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-admin-cv-upload-resume-registration.md`
+  summary: `extract_text_from_docx` only reads top-level paragraph text (`doc.paragraphs`) — tables, headers/footers, and text boxes are silently dropped, so a table-based CV layout (skills/dates commonly laid out in tables) can produce an incomplete profile with no error or warning.
+  evidence: Flagged by both reviewers of the CV-upload spec (2026-07-12). A deliberate scope choice at spec-authoring time (frozen spec explicitly said "pure python-docx paragraph-join"), not an oversight — but real CVs commonly use tables, so worth revisiting if incomplete profiles turn out to be common in practice.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-admin-cv-upload-resume-registration.md`
+  summary: No idempotency/double-click guard on the Admin page's "Extract & Register Profile" button — since `profiles` is insert-only, a double-click or repeat submission creates duplicate rows and burns a Gemini API call each time.
+  evidence: Flagged in adversarial review of the CV-upload spec (2026-07-12). Matches a pre-existing, app-wide pattern — no button anywhere in `views/*.py` disables itself while its own action is in flight — not specific to this diff.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-admin-cv-upload-resume-registration.md`
+  summary: No confirmation or warning before a new CV upload supersedes the currently "latest" profile — since match-scoring/tailoring always reads `get_latest_profile` (latest wins), uploading a new CV silently changes behavior for every job already in the pipeline.
+  evidence: Flagged in adversarial review of the CV-upload spec (2026-07-12). Same theme as the already-logged "no confirmation before destructive sponsor-register replace" item above — a UX design decision, not a trivial patch.

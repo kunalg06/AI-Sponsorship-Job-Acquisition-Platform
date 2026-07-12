@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+import docx
 from google import genai
 from pydantic import BaseModel
 
@@ -50,3 +51,8 @@ def extract_profile(raw_resume_text: str, *, client: Optional[genai.Client] = No
         },
     )
     return ResumeProfile.model_validate_json(interaction.output_text)
+
+
+def extract_text_from_docx(file) -> str:
+    """Pull raw text out of a .docx file (paragraph-join, no formatting)."""
+    return "\n".join(p.text for p in docx.Document(file).paragraphs)

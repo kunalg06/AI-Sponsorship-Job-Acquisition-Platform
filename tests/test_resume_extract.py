@@ -1,6 +1,9 @@
+import io
 from unittest.mock import MagicMock
 
-from resume.extract import MODEL, ResumeProfile, extract_profile
+import docx
+
+from resume.extract import MODEL, ResumeProfile, extract_profile, extract_text_from_docx
 
 
 def test_extract_profile_calls_gemini_with_expected_shape_and_parses_output():
@@ -24,3 +27,22 @@ def test_extract_profile_calls_gemini_with_expected_shape_and_parses_output():
     assert kwargs["model"] == MODEL
     assert kwargs["input"] == "some raw resume text"
     assert kwargs["response_format"]["schema"] == ResumeProfile.model_json_schema()
+
+
+def test_extract_text_from_docx_joins_paragraph_text_with_newlines():
+    doc = docx.Document()
+    doc.add_paragraph("Jane Doe")
+    doc.add_paragraph("Senior ML Engineer with 5 years of experience.")
+    doc.add_paragraph("Skills: Python, PyTorch, LangGraph")
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+
+    result = extract_text_from_docx(buffer)
+
+    assert result == (
+        "Jane Doe\n"
+        "Senior ML Engineer with 5 years of experience.\n"
+        "Skills: Python, PyTorch, LangGraph"
+    )
