@@ -15,6 +15,11 @@
 - source_spec: none
   summary: Add an "Admin" Streamlit page with (a) CV upload -> `resume.extract`/`resume.db` profile registration and (b) a sponsor-register-ingest button calling `register.ingest.ingest(...)` — needed because Streamlit Cloud has no shell access and `data/`/`cv/`/`.env` are gitignored, so a fresh cloud deploy starts empty.
   evidence: Split from the same "prep for Streamlit Cloud deployment" intent on 2026-07-11 — independently shippable, deferred in favor of tackling the higher-risk tailoring-storage change first.
+  note: Split further on 2026-07-12 into two independent goals — see the new "CV upload -> resume registration" entry below for the (a) half. This entry's (b) half (sponsor-register-ingest button) is being implemented now.
+
+- source_spec: none
+  summary: Add a CV-upload control to the Admin Streamlit page that extracts resume text and registers a profile via `resume.extract.extract_profile`/`resume.db.insert_profile` — the (a) half of the original combined "Admin page" deferred item.
+  evidence: Split from the combined Admin-page intent on 2026-07-12 — independently shippable from the sponsor-register-ingest button (unrelated domain: `resume.db`/profile.db vs. sponsors.db), and non-trivial on its own: no docx-to-text extraction helper exists yet (the CLI's `_read_input` only reads plain `.txt`; a real `.docx` CV upload needs new logic, likely via the already-installed `python-docx`, to get raw text out first). Deferred in favor of shipping the simpler, already-complete-pipeline register-ingest button first.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-tailored-content-file-only-storage.md`
   summary: Stop persisting outreach-message text (`outreach_messages.message`) in `jobs.db` — write drafted outreach messages to `cv/generated_cv/<company>/{job_id}_outreach_{channel}.txt` instead, keeping only metadata (channel, contact_name, char_count) in the DB.
@@ -51,3 +56,19 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-requirements-txt-streamlit-cloud.md`
   summary: `requirements.txt` uses a floating `-e .` install (pip resolves fresh against `pyproject.toml`'s loose version floors) rather than a frozen list generated from `uv.lock`, so Streamlit Cloud can silently resolve a different dependency graph than what's tested locally — and nothing detects that drift since this repo intentionally has no CI.
   evidence: Flagged in the adversarial review (2026-07-12) of the `requirements.txt` one-shot change. A deliberate trade-off for now (matches the deferred-work item's original "-e ." instruction and this project's no-CI-by-design convention), but worth revisiting if a Cloud deploy ever breaks from an unexpected dependency bump.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-admin-sponsor-register-ingest.md`
+  summary: `register.cli.DEFAULT_SOURCE` is one specific dated gov.uk CSV snapshot, not an auto-updating "latest register" endpoint — every click of the new Admin page's "Refresh sponsor register now" button re-fetches that exact same frozen file forever, and there's no way to point it at a newer release without editing the constant and redeploying (a custom-source input was explicitly ruled out of scope for that spec). The ingest summary also never tells the user when a fetch returned the same/no-newer `source_updated` as what's already loaded, so a "successful" refresh can silently be a no-op.
+  evidence: Flagged by both reviewers (adversarial + edge-case) of the Admin-page spec (2026-07-12). Root cause (the dated snapshot URL) predates this diff — inherited unchanged from `register/cli.py`/`register/ingest.py` — this just exposes it through a UI button instead of the CLI.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-admin-sponsor-register-ingest.md`
+  summary: No concurrency guard around sponsor-register ingest — two overlapping runs (double-click, two browser tabs, or a concurrent reader elsewhere in the app) can race against `replace_all`'s `DELETE`+`INSERT`, surfacing as a raw `sqlite3.OperationalError` ("database is locked") with no `PRAGMA busy_timeout` or button-disable-while-in-flight to soften it.
+  evidence: Flagged by both reviewers of the Admin-page spec (2026-07-12). Pre-existing architectural gap — no SQLite connection anywhere in `register/db.py` or `views/*.py` sets `busy_timeout` (only `mcp_server/tools.py` does, specifically for MCP-vs-Streamlit contention) — same theme as the already-logged "no atomic file writes anywhere" item above.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-admin-sponsor-register-ingest.md`
+  summary: No confirmation step before the Admin page's "Refresh sponsor register now" button fires a destructive whole-table wipe+reload of the sponsor register — a bigger blast radius than this codebase's other single-click mutations (e.g. "Mark discarded"), which only ever touch one row.
+  evidence: Flagged in adversarial review of the Admin-page spec (2026-07-12). Matches this codebase's general no-confirmation convention, but whether to add a confirm step here is a UX design decision, not a trivial patch.
+
+- source_spec: none
+  summary: `st.error(str(exc))` — used identically across every view in this codebase, including the new Admin page — can render a blank error box for any exception whose `str()` happens to be empty (e.g. some `OSError`/`HTTPError` subclasses), giving the user no information about what went wrong.
+  evidence: Flagged by the edge-case reviewer of the Admin-page spec (2026-07-12) but applies identically everywhere this pattern is already used (`views/intake.py`, `views/jobs_list.py`), so it's a systemic, pre-existing pattern rather than something specific to any one diff.
