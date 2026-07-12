@@ -31,3 +31,5 @@
 - source_spec: none
   summary: `.gitignore` excludes `data/*.db` and `cv/` (personal resume/CV content) but not `data/tailored/` — the plain-text `tailor` CLI command and `migrate-legacy-tailoring`'s DB-text-backup step both write real tailored-resume/cover-letter text there, which is currently untracked-but-committable in this public repo.
   evidence: Discovered 2026-07-12 while committing the tailored-content-file-only-storage spec's implementation — `data/tailored/1_resume.txt`/`1_cover_letter.txt` (real personal content, written by this session's `migrate-legacy-tailoring` run) showed up as untracked (`??`) rather than ignored. Deliberately left out of that commit; `.gitignore` should add `data/tailored/` (or a broader `data/` pattern) before any future `git add` in this area.
+  status: done 2026-07-12
+  resolution: Added `data/tailored/` to `.gitignore`; confirmed via `git status` that the directory no longer shows as untracked.

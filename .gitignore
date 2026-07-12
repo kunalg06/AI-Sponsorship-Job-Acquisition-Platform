@@ -3,6 +3,7 @@
 
 # Local runtime state (SQLite DBs, personal data)
 data/*.db
+data/tailored/
 
 # Personal resume/CV content and generated per-company tailored output
 cv/
