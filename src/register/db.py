@@ -67,6 +67,7 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 5000")
     conn.executescript(SCHEMA)
     return conn
 
@@ -129,6 +130,35 @@ def lookup_contains(conn: sqlite3.Connection, match_key: str) -> list[sqlite3.Ro
 
 def count(conn: sqlite3.Connection) -> int:
     return conn.execute("SELECT COUNT(*) FROM sponsors").fetchone()[0]
+
+
+def get_current_source_updated(conn: sqlite3.Connection) -> Optional[str]:
+    """The `source_updated` of the currently loaded snapshot, or None if empty.
+
+    Every row from one ingest run shares the same `source_updated` (see
+    `register.ingest.build_records`), so any single row is representative.
+    Lets a caller detect a no-op refresh (same snapshot re-fetched) before
+    deciding how to report the result.
+    """
+    row = conn.execute("SELECT source_updated FROM sponsors LIMIT 1").fetchone()
+    return row["source_updated"] if row else None
+
+
+def is_noop_refresh(previous_source_updated: Optional[str], new_source_updated: Optional[str]) -> bool:
+    """True when a refresh's fetched snapshot date matches what was already loaded.
+
+    Both sides are normalized (empty string treated the same as None) before
+    comparing, since `ingest()` can return a raw `None` for an unparseable
+    source date while a DB round-trip stores/returns `""` for the same case
+    (`register.ingest.build_records` writes `source_updated or ""`). Without
+    normalizing, `None != ""` would report every unparseable-date refresh as
+    "new" even when it's a re-fetch of the exact same source. When the date
+    can't be determined on either side, this stays conservative and reports
+    "not a no-op" (never claims two unknown-date snapshots are the same one).
+    """
+    previous = previous_source_updated or None
+    current = new_source_updated or None
+    return bool(previous and current and previous == current)
 
 
 def upsert_override(

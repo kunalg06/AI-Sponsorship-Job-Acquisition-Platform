@@ -1,7 +1,7 @@
 import pytest
 
 from register import ingest as ingest_module
-from register.db import connect, lookup, lookup_contains
+from register.db import connect, get_current_source_updated, is_noop_refresh, lookup, lookup_contains
 from register.normalize import make_match_key
 
 SAMPLE_CSV = (
@@ -125,3 +125,56 @@ def test_reingest_replaces_rather_than_appends(tmp_path):
 
     assert summary["rows_loaded"] == 1
     assert summary["rows_in_db"] == 1
+
+
+def test_connect_sets_busy_timeout_pragma(tmp_path):
+    db_path = tmp_path / "sponsors.db"
+    conn = connect(db_path)
+    try:
+        # PRAGMA busy_timeout with no argument returns the current value (ms).
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+    finally:
+        conn.close()
+
+
+def test_get_current_source_updated_returns_none_for_empty_table(tmp_path):
+    db_path = tmp_path / "sponsors.db"
+    conn = connect(db_path)
+    try:
+        assert get_current_source_updated(conn) is None
+    finally:
+        conn.close()
+
+
+def test_get_current_source_updated_returns_value_after_ingest(tmp_path):
+    csv_path = tmp_path / "register-2026-07-03.csv"
+    csv_path.write_text(SAMPLE_CSV, encoding="utf-8")
+    db_path = tmp_path / "sponsors.db"
+
+    ingest_module.ingest(str(csv_path), str(db_path))
+
+    conn = connect(db_path)
+    try:
+        assert get_current_source_updated(conn) == "2026-07-03"
+    finally:
+        conn.close()
+
+
+def test_is_noop_refresh_true_when_dates_match():
+    assert is_noop_refresh("2026-07-03", "2026-07-03") is True
+
+
+def test_is_noop_refresh_false_when_dates_differ():
+    assert is_noop_refresh("2026-06-01", "2026-07-03") is False
+
+
+def test_is_noop_refresh_false_when_previous_is_none():
+    assert is_noop_refresh(None, "2026-07-03") is False
+
+
+def test_is_noop_refresh_false_when_both_unparseable():
+    # None (fresh ingest()) and "" (a DB round-trip of the same unparseable
+    # case) must not be treated as a match just because they're both falsy.
+    assert is_noop_refresh(None, None) is False
+    assert is_noop_refresh("", "") is False
+    assert is_noop_refresh("", None) is False
