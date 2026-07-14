@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sqlite3
 import sys
 import urllib.error
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -234,13 +236,43 @@ def _cmd_match_score(args: argparse.Namespace) -> None:
         conn.close()
 
 
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Write `content` to `path` atomically for a single writer - a crash or
+    failure at any point before the final rename leaves `path` with its full
+    prior content (or absent), never truncated. Does not arbitrate between
+    concurrent writers targeting the same `path`; the tmp filename includes
+    a pid+random suffix so overlapping calls don't share one tmp file, but
+    if two calls race to completion, the final `os.replace` is still
+    last-writer-wins (as any rename-based scheme is, absent external
+    locking - out of scope here). Temp file is a same-directory sibling so
+    `os.replace` stays a same-filesystem rename; mirrors
+    `_bmad/scripts/memlog.py`'s own `write_atomic()` pattern.
+    """
+    tmp = path.parent / f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except (OSError, ValueError):
+        tmp.unlink(missing_ok=True)
+        raise
+
+
 def _write_tailoring_files(out_dir: str, job_id: int, tailored_resume: str, cover_letter: str) -> None:
+    # Deliberately no try/except here (or in _migrate_legacy_text below): only the
+    # outreach draft write (see _draft_and_store_outreach) runs after a DB commit
+    # that would otherwise silently desync, so only that site needs a distinct
+    # failure message. A raised OSError here propagates uncaught, same as before
+    # this file's writes became atomic - unchanged behavior, just no longer able
+    # to leave a truncated file behind.
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
     resume_path = out_path / f"{job_id}_resume.txt"
     cover_letter_path = out_path / f"{job_id}_cover_letter.txt"
-    resume_path.write_text(tailored_resume, encoding="utf-8")
-    cover_letter_path.write_text(cover_letter, encoding="utf-8")
+    _atomic_write_text(resume_path, tailored_resume)
+    _atomic_write_text(cover_letter_path, cover_letter)
     print(f"  Written to: {resume_path}")
     print(f"              {cover_letter_path}")
 
@@ -532,11 +564,11 @@ def _migrate_legacy_text(conn, out_dir: str) -> None:
         resume_path = out_path / f"{row['id']}_resume.txt"
         cover_letter_path = out_path / f"{row['id']}_cover_letter.txt"
         if row["tailored_resume"] and not resume_path.exists():
-            resume_path.write_text(row["tailored_resume"], encoding="utf-8")
+            _atomic_write_text(resume_path, row["tailored_resume"])
             print(f"  Wrote {resume_path}")
             wrote_any = True
         if row["cover_letter"] and not cover_letter_path.exists():
-            cover_letter_path.write_text(row["cover_letter"], encoding="utf-8")
+            _atomic_write_text(cover_letter_path, row["cover_letter"])
             print(f"  Wrote {cover_letter_path}")
             wrote_any = True
 
@@ -660,7 +692,7 @@ def _migrate_legacy_outreach_text(conn, out_dir: str) -> None:
             continue
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(row["message"], encoding="utf-8")
+            _atomic_write_text(path, row["message"])
         except OSError as exc:
             print(f"  Warning: failed to back up message #{row['id']} to {path}: {exc}")
             continue
@@ -791,7 +823,19 @@ def _draft_and_store_outreach(
         )
     path = _outreach_message_path(job["company_name"], job["id"], channel, message_id, out_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(draft.message, encoding="utf-8")
+    try:
+        _atomic_write_text(path, draft.message)
+    except (OSError, ValueError) as exc:
+        # draft.message is still in memory here - print it so the operator can
+        # recover it by copy-paste instead of re-running a non-deterministic,
+        # LLM-backed redraft from scratch.
+        print(f"  --- Drafted message text (recover this before it's gone) ---")
+        print(f"  {draft.message}")
+        raise SystemExit(
+            f"Job #{job['id']}: outreach message #{message_id} ({channel}, {len(draft.message)} chars) "
+            f"was logged to the database, but writing its text to {path} failed: {exc}. "
+            "The drafted text itself was not saved to disk - printed above for manual recovery."
+        )
 
     print(f"Job #{job['id']}: {channel} draft for {contact_name} ({len(draft.message)} chars)")
     print("  ---")

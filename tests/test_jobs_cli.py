@@ -10,6 +10,7 @@ Spec Change Log for the full story.
 
 from __future__ import annotations
 
+import builtins
 import sqlite3
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -829,3 +830,102 @@ def test_drafting_against_an_unmigrated_legacy_db_raises_a_friendly_error_naming
                 str(tmp_path / "generated_cv"),
             ]
         )
+
+
+def test_atomic_write_text_writes_full_content_and_leaves_no_tmp_file(tmp_path):
+    target = tmp_path / "file.txt"
+
+    jobs_cli._atomic_write_text(target, "hello world")
+
+    assert target.read_text(encoding="utf-8") == "hello world"
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_atomic_write_text_leaves_prior_content_intact_and_cleans_up_tmp_when_replace_fails(tmp_path, monkeypatch):
+    target = tmp_path / "file.txt"
+    target.write_text("original content", encoding="utf-8")
+
+    monkeypatch.setattr(jobs_cli.os, "replace", MagicMock(side_effect=OSError("simulated disk failure")))
+
+    with pytest.raises(OSError, match="simulated disk failure"):
+        jobs_cli._atomic_write_text(target, "new content that must never land")
+
+    assert target.read_text(encoding="utf-8") == "original content"
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_atomic_write_text_leaves_prior_content_intact_and_cleans_up_tmp_when_fsync_fails(tmp_path, monkeypatch):
+    """A real ENOSPC realistically surfaces during the write/fsync step, not
+    `os.replace` - covered separately from the replace-failure test above so
+    both halves of the helper's error path are exercised."""
+    target = tmp_path / "file.txt"
+    target.write_text("original content", encoding="utf-8")
+
+    monkeypatch.setattr(jobs_cli.os, "fsync", MagicMock(side_effect=OSError("simulated ENOSPC")))
+
+    with pytest.raises(OSError, match="simulated ENOSPC"):
+        jobs_cli._atomic_write_text(target, "new content that must never land")
+
+    assert target.read_text(encoding="utf-8") == "original content"
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_atomic_write_text_successive_calls_use_distinct_tmp_filenames(tmp_path, monkeypatch):
+    """Each call must get its own pid+uuid-suffixed tmp sibling, not a
+    single static name - otherwise two overlapping writers targeting the
+    same path would share one tmp file and could interleave/corrupt it."""
+    target = tmp_path / "file.txt"
+    seen_tmp_names = []
+    real_open = builtins.open
+
+    def spying_open(path, *args, **kwargs):
+        if Path(path) != target:
+            seen_tmp_names.append(str(path))
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", spying_open)
+
+    jobs_cli._atomic_write_text(target, "first")
+    jobs_cli._atomic_write_text(target, "second")
+
+    assert len(seen_tmp_names) == 2
+    assert seen_tmp_names[0] != seen_tmp_names[1]
+    assert target.read_text(encoding="utf-8") == "second"
+
+
+def test_cmd_outreach_write_failure_after_db_commit_raises_distinct_lost_text_error(outreach_env, monkeypatch, capsys):
+    """The DB row commits before the file write is attempted (see
+    `_draft_and_store_outreach`), so a write failure here is worse than an
+    ordinary I/O error - the metadata now refers to text that no longer
+    exists anywhere. The error must say so explicitly, not just surface a
+    generic OSError, and the drafted text must be printed for manual
+    recovery since re-running would call the LLM again from scratch."""
+    monkeypatch.setattr(jobs_cli, "_atomic_write_text", MagicMock(side_effect=OSError("disk full")))
+
+    with pytest.raises(SystemExit, match="was logged to the database.*text itself was not saved"):
+        _run(
+            [
+                "outreach",
+                str(outreach_env["job_id"]),
+                "--channel",
+                LINKEDIN_NOTE,
+                "--db",
+                str(outreach_env["jobs_db"]),
+                "--profile-db",
+                str(outreach_env["profile_db"]),
+                "--out-dir",
+                str(outreach_env["out_dir"]),
+            ]
+        )
+
+    assert "Hi Sarah, I'd love to chat about the AI Engineer role." in capsys.readouterr().out
+
+    # The DB row is still there (insert-only convention, no rollback) -
+    # this is the exact orphaned-metadata state the error message must warn about.
+    conn = connect_jobs(outreach_env["jobs_db"])
+    try:
+        ensure_outreach_schema(conn)
+        messages = list_outreach_messages(conn, outreach_env["job_id"])
+    finally:
+        conn.close()
+    assert len(messages) == 1
