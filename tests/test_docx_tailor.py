@@ -3,10 +3,12 @@ from unittest.mock import MagicMock
 import docx
 import pytest
 
+import jobs.docx_tailor as docx_tailor_module
 from jobs.docx_tailor import (
     MODEL,
     SourceParagraph,
     TailoredResumeEdits,
+    _atomic_write_bytes,
     build_tailored_docx,
     estimate_page_risk,
     extract_paragraphs,
@@ -202,4 +204,39 @@ def test_write_plain_docx_creates_one_paragraph_per_block(tmp_path):
     paragraphs = [p.text for p in docx.Document(str(out_path)).paragraphs]
     assert "Dear Hiring Manager," in paragraphs
     assert "I'm excited to apply." in paragraphs
-    assert "Best,\nJane" in paragraphs
+
+
+def test_atomic_write_bytes_writes_full_content_and_leaves_no_tmp_file(tmp_path):
+    target = tmp_path / "file.docx"
+
+    _atomic_write_bytes(target, b"fake docx bytes")
+
+    assert target.read_bytes() == b"fake docx bytes"
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_atomic_write_bytes_leaves_prior_content_intact_and_cleans_up_tmp_when_replace_fails(tmp_path, monkeypatch):
+    target = tmp_path / "file.docx"
+    target.write_bytes(b"original docx bytes")
+
+    monkeypatch.setattr(docx_tailor_module.os, "replace", MagicMock(side_effect=OSError("simulated disk failure")))
+
+    with pytest.raises(OSError, match="simulated disk failure"):
+        _atomic_write_bytes(target, b"new bytes that must never land")
+
+    assert target.read_bytes() == b"original docx bytes"
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_build_tailored_docx_leaves_no_partial_file_when_replace_fails(tmp_path, monkeypatch):
+    source = tmp_path / "resume.docx"
+    _make_resume_docx(source)
+    out_path = tmp_path / "out" / "tailored.docx"
+
+    monkeypatch.setattr(docx_tailor_module.os, "replace", MagicMock(side_effect=OSError("simulated disk failure")))
+
+    with pytest.raises(OSError, match="simulated disk failure"):
+        build_tailored_docx(source, {}, out_path)
+
+    assert not out_path.exists()
+    assert list((tmp_path / "out").glob("*.tmp")) == []

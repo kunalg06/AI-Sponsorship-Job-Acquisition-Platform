@@ -17,6 +17,7 @@ from typing import Optional
 from jobs.cli import (
     DEFAULT_GENERATED_CV_DIR,
     DEFAULT_SOURCE_RESUME_DIR,
+    _atomic_write_text,
     _load_resume_and_narrative,
     _outreach_message_path,
     _require_raw_resume_text,
@@ -96,7 +97,17 @@ def draft_and_save_outreach(
             )
         path = _outreach_message_path(job["company_name"], job_id, channel, message_id, DEFAULT_GENERATED_CV_DIR)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(draft.message, encoding="utf-8")
+        try:
+            _atomic_write_text(path, draft.message)
+        except (OSError, ValueError) as exc:
+            # Unlike the CLI's equivalent fix, the recovery text goes in the
+            # exception message itself, not print()'d - a Streamlit user only
+            # ever sees this via `st.error(str(exc))`, never server stdout.
+            raise SystemExit(
+                f"Job #{job_id}: outreach message #{message_id} ({channel}, {len(draft.message)} chars) "
+                f"was logged to the database, but writing its text to {path} failed: {exc}. "
+                f"The drafted text itself was not saved to disk - recover it below:\n\n{draft.message}"
+            )
         return draft
     finally:
         jobs_conn.close()

@@ -21,7 +21,10 @@ character count is what keeps the tailored version at the same page count.
 
 from __future__ import annotations
 
+import io
+import os
 import re
+import uuid
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +35,25 @@ from google import genai
 from pydantic import BaseModel
 
 MODEL = "gemini-3.5-flash"
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Write `data` to `path` atomically - mirrors `jobs.cli._atomic_write_text`'s
+    design (same-directory pid+uuid tmp naming, fsync, `os.replace`, cleanup on
+    failure) but for binary content, since `Document.save()` writes a zip
+    container, not text. Implemented locally rather than imported from
+    `jobs.cli`, which already imports this module - importing back would be
+    circular."""
+    tmp = path.parent / f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 @dataclass(frozen=True)
@@ -156,7 +178,9 @@ def build_tailored_docx(source_path: str | Path, rewritten: dict[int, str], out_
             _set_paragraph_text_preserving_format(paragraph, rewritten[i])
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    document.save(str(out_path))
+    buffer = io.BytesIO()
+    document.save(buffer)
+    _atomic_write_bytes(out_path, buffer.getvalue())
 
 
 def estimate_page_risk(source_path: str | Path, rewritten: dict[int, str]) -> Optional[str]:
@@ -200,4 +224,6 @@ def write_plain_docx(text: str, out_path: str | Path) -> None:
             document.add_paragraph(block)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    document.save(str(out_path))
+    buffer = io.BytesIO()
+    document.save(buffer)
+    _atomic_write_bytes(out_path, buffer.getvalue())
