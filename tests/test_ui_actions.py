@@ -8,21 +8,37 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import docx
 import pytest
+from streamlit.testing.v1 import AppTest
 
+import jobs.cli as jobs_cli
 import jobs.ui_actions as ui_actions
+from jobs.cli import DEFAULT_GENERATED_CV_DIR, _tailored_docx_paths
 from jobs.db import connect as connect_jobs
 from jobs.db import insert_job
 from jobs.extract import JobExtraction
 from jobs.outreach import LINKEDIN_NOTE, OutreachDraft
 from jobs.outreach_db import ensure_schema as ensure_outreach_schema
 from jobs.outreach_db import list_outreach_messages
-from jobs.ui_actions import _outreach_message_path, draft_and_save_outreach, error_display_text
+from jobs.tailor import TailoredApplication
+from jobs.ui_actions import (
+    _outreach_message_path,
+    draft_and_save_outreach,
+    error_display_text,
+    generate_tailored_docx_for_job,
+)
 from resume.db import connect as connect_profile
 from resume.db import insert_narrative, insert_profile
 from resume.extract import ResumeProfile
 
 RESUME_TEXT = "Jane Doe - Senior Backend Engineer. 5 years Python."
+
+# Resolved at import time (before any test's chdir into a tmp sandbox) so
+# AppTest.from_file can find the real scripts regardless of the test's cwd.
+_VIEWS_DIR = Path(__file__).resolve().parent.parent / "views"
+INTAKE_PY = str(_VIEWS_DIR / "intake.py")
+JOBS_LIST_PY = str(_VIEWS_DIR / "jobs_list.py")
 
 
 def _seed_profile_and_narrative(profile_db_path: Path) -> None:
@@ -184,3 +200,165 @@ def test_error_display_text_survives_a_str_that_itself_raises():
 
     assert text != ""
     assert "BrokenStr" in text
+
+
+def _make_source_resume_docx(path: Path) -> None:
+    document = docx.Document()
+    document.add_paragraph("JANE DOE")
+    document.add_paragraph("SUMMARY")
+    document.add_paragraph("Software engineer with 5 years building backend systems in Python.")
+    document.save(str(path))
+
+
+@pytest.fixture
+def ui_tailor_env(tmp_path, monkeypatch):
+    """A ready-to-use jobs.db (one job) + profile.db + a real source .docx,
+    with the two LLM-calling functions the docx path uses monkeypatched -
+    same mocking approach as test_jobs_cli.py's `env` fixture (independent
+    setup, not shared, to keep this file's fixtures self-contained), scoped
+    to generate_tailored_docx_for_job instead of the CLI wiring."""
+    jobs_db = tmp_path / "jobs.db"
+    profile_db = tmp_path / "profile.db"
+    resume_dir = tmp_path / "my-resume"
+    resume_dir.mkdir()
+    _make_source_resume_docx(resume_dir / "resume.docx")
+
+    conn = connect_jobs(jobs_db)
+    try:
+        job_id = insert_job(
+            conn,
+            "job posting text",
+            JobExtraction(job_title="AI Engineer", company_name="Acme AI", is_agency_posting=False),
+        )
+    finally:
+        conn.close()
+
+    _seed_profile_and_narrative(profile_db)
+
+    tailor_calls = MagicMock(
+        return_value=TailoredApplication(
+            tailored_resume="TAILORED RESUME",
+            cover_letter="COVER LETTER",
+            evidence_notes=["evidence note"],
+            portfolio_gaps=["portfolio gap"],
+        )
+    )
+    paragraph_calls = MagicMock(return_value={})
+    monkeypatch.setattr(jobs_cli, "generate_tailored_application", tailor_calls)
+    monkeypatch.setattr(jobs_cli, "generate_paragraph_edits", paragraph_calls)
+    monkeypatch.setattr(ui_actions, "DEFAULT_SOURCE_RESUME_DIR", str(resume_dir))
+    monkeypatch.setattr(ui_actions, "DEFAULT_GENERATED_CV_DIR", str(tmp_path / "generated_cv"))
+
+    return {
+        "jobs_db": jobs_db,
+        "profile_db": profile_db,
+        "job_id": job_id,
+        "tailor_calls": tailor_calls,
+        "paragraph_calls": paragraph_calls,
+    }
+
+
+def test_generate_tailored_docx_for_job_with_force_true_bypasses_cache_and_calls_llm_again(ui_tailor_env):
+    out_dir, _ = generate_tailored_docx_for_job(
+        ui_tailor_env["job_id"], str(ui_tailor_env["jobs_db"]), str(ui_tailor_env["profile_db"])
+    )
+    cover_letter_path = out_dir / f"{ui_tailor_env['job_id']}_cover_letter.docx"
+    first_cover_text = docx.Document(str(cover_letter_path)).paragraphs[0].text
+    assert ui_tailor_env["tailor_calls"].call_count == 1
+
+    ui_tailor_env["tailor_calls"].return_value = TailoredApplication(
+        tailored_resume="TAILORED RESUME_V2",
+        cover_letter="COVER LETTER_V2",
+        evidence_notes=["evidence note_V2"],
+        portfolio_gaps=["portfolio gap_V2"],
+    )
+    generate_tailored_docx_for_job(
+        ui_tailor_env["job_id"], str(ui_tailor_env["jobs_db"]), str(ui_tailor_env["profile_db"]), force=True
+    )
+
+    assert ui_tailor_env["tailor_calls"].call_count == 2
+    assert ui_tailor_env["paragraph_calls"].call_count == 2
+    second_cover_text = docx.Document(str(cover_letter_path)).paragraphs[0].text
+    assert second_cover_text != first_cover_text
+    assert "COVER LETTER_V2" in second_cover_text
+
+
+def test_generate_tailored_docx_for_job_with_force_false_default_still_uses_cache(ui_tailor_env):
+    out_dir, _ = generate_tailored_docx_for_job(
+        ui_tailor_env["job_id"], str(ui_tailor_env["jobs_db"]), str(ui_tailor_env["profile_db"])
+    )
+    cover_letter_path = out_dir / f"{ui_tailor_env['job_id']}_cover_letter.docx"
+    first_cover_text = docx.Document(str(cover_letter_path)).paragraphs[0].text
+    assert ui_tailor_env["tailor_calls"].call_count == 1
+
+    ui_tailor_env["tailor_calls"].return_value = TailoredApplication(
+        tailored_resume="TAILORED RESUME_V2",
+        cover_letter="COVER LETTER_V2",
+        evidence_notes=["evidence note_V2"],
+        portfolio_gaps=["portfolio gap_V2"],
+    )
+    generate_tailored_docx_for_job(ui_tailor_env["job_id"], str(ui_tailor_env["jobs_db"]), str(ui_tailor_env["profile_db"]))
+
+    assert ui_tailor_env["tailor_calls"].call_count == 1
+    assert ui_tailor_env["paragraph_calls"].call_count == 1
+    second_cover_text = docx.Document(str(cover_letter_path)).paragraphs[0].text
+    assert second_cover_text == first_cover_text
+
+
+def _seed_job_with_existing_docx_cache(jobs_db_path) -> int:
+    """Insert a job AND touch its docx cache files (only existence is
+    checked by `already_generated`, not content) so the tailor button
+    renders as "Regenerate", not "Generate"."""
+    conn = connect_jobs(jobs_db_path)
+    try:
+        job_id = insert_job(
+            conn,
+            "job posting text",
+            JobExtraction(job_title="AI Engineer", company_name="Bending Spoons", is_agency_posting=False),
+        )
+    finally:
+        conn.close()
+
+    resume_path, cover_letter_path = _tailored_docx_paths("Bending Spoons", job_id, DEFAULT_GENERATED_CV_DIR)
+    resume_path.parent.mkdir(parents=True, exist_ok=True)
+    resume_path.touch()
+    cover_letter_path.touch()
+    return job_id
+
+
+def test_jobs_list_regenerate_button_passes_force_true_when_docx_cache_already_exists(streamlit_data_env, monkeypatch):
+    """View-wiring check: the force=True/False tests above only call
+    generate_tailored_docx_for_job directly - they can't catch a regression
+    at the actual views/jobs_list.py call site (e.g. reverting to a
+    hardcoded force=False, or inverting the boolean). This drives the real
+    page via AppTest instead."""
+    job_id = _seed_job_with_existing_docx_cache(streamlit_data_env / "data" / "jobs.db")
+    mock_tailor = MagicMock(side_effect=SystemExit())
+    monkeypatch.setattr("jobs.ui_actions.generate_tailored_docx_for_job", mock_tailor)
+
+    at = AppTest.from_file(JOBS_LIST_PY)
+    at.run()
+
+    tailor_button = next(b for b in at.button if b.label == "Regenerate tailored resume & cover letter")
+    tailor_button.click().run()
+
+    assert mock_tailor.call_args.kwargs["force"] is True
+
+
+def test_intake_regenerate_button_passes_force_true_when_docx_cache_already_exists(streamlit_data_env, monkeypatch):
+    job_id = _seed_job_with_existing_docx_cache(streamlit_data_env / "data" / "jobs.db")
+    mock_tailor = MagicMock(side_effect=SystemExit())
+    monkeypatch.setattr("jobs.ui_actions.generate_tailored_docx_for_job", mock_tailor)
+
+    at = AppTest.from_file(INTAKE_PY)
+    at.session_state["extraction"] = JobExtraction(
+        job_title="AI Engineer", company_name="Bending Spoons", is_agency_posting=False
+    )
+    at.session_state["resolved_employer"] = "Bending Spoons"
+    at.session_state["saved_job_id"] = job_id
+    at.run()
+
+    tailor_button = next(b for b in at.button if "tailored resume" in b.label)
+    tailor_button.click().run()
+
+    assert mock_tailor.call_args.kwargs["force"] is True

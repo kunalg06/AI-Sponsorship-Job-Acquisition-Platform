@@ -364,7 +364,9 @@ if extraction:
                 if st.button(label):
                     with st.spinner("Tailoring your resume - keeping your original formatting..."):
                         try:
-                            out_dir, warning = generate_tailored_docx_for_job(saved_job_id, JOBS_DB, PROFILE_DB)
+                            out_dir, warning = generate_tailored_docx_for_job(
+                                saved_job_id, JOBS_DB, PROFILE_DB, force=already_generated
+                            )
                         except SystemExit as exc:
                             st.error(error_display_text(exc))
                         else:

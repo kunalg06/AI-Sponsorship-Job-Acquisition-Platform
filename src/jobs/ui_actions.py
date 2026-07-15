@@ -46,11 +46,19 @@ def error_display_text(exc: BaseException) -> str:
     return text or f"{type(exc).__name__}: (no error message)"
 
 
-def generate_tailored_docx_for_job(job_id: int, jobs_db: str, profile_db: str) -> tuple[Path, Optional[str]]:
+def generate_tailored_docx_for_job(
+    job_id: int, jobs_db: str, profile_db: str, force: bool = False
+) -> tuple[Path, Optional[str]]:
     """Tailor the resume + cover letter for any stored job. Mirrors
     `jobs.cli tailor-docx` via the same shared `_tailor_docx_for_job` helper
     (job_id-keyed cache-check - see that function's docstring). Returns
     (output directory, page-risk warning).
+
+    `force=True` bypasses the cache check even when a valid docx pair
+    already exists, triggering a real LLM call and overwriting the
+    existing files - a caller passes an already-computed "does a cached
+    pair exist" flag here so a button labeled "Regenerate" actually
+    regenerates.
 
     Raises `SystemExit` for an unknown `job_id` - matching the CLI's own
     `_cmd_tailor`/`_cmd_tailor_docx` convention. Both Streamlit callers of
@@ -66,7 +74,7 @@ def generate_tailored_docx_for_job(job_id: int, jobs_db: str, profile_db: str) -
             raise SystemExit(f"No job #{job_id} found in {jobs_db}")
         raw_resume_text = _require_raw_resume_text(profile_db)
         result = _tailor_docx_for_job(
-            jobs_conn, job, raw_resume_text, DEFAULT_SOURCE_RESUME_DIR, DEFAULT_GENERATED_CV_DIR, force=False
+            jobs_conn, job, raw_resume_text, DEFAULT_SOURCE_RESUME_DIR, DEFAULT_GENERATED_CV_DIR, force=force
         )
         return result.resume_path.parent, result.page_risk_warning
     finally:

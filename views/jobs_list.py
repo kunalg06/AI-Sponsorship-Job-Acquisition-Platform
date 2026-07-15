@@ -283,7 +283,9 @@ else:
         if st.button(tailor_label, key=f"tailor_{job['id']}"):
             with st.spinner("Tailoring your resume - keeping your original formatting..."):
                 try:
-                    out_dir, warning = generate_tailored_docx_for_job(job["id"], JOBS_DB, PROFILE_DB)
+                    out_dir, warning = generate_tailored_docx_for_job(
+                        job["id"], JOBS_DB, PROFILE_DB, force=already_generated
+                    )
                 except SystemExit as exc:
                     st.error(error_display_text(exc))
                 else:

@@ -64,7 +64,8 @@ def test_admin_page_shows_error_display_text_for_empty_message_exception(streaml
 
 def test_intake_page_shows_error_display_text_for_empty_message_exception(streamlit_data_env, monkeypatch):
     job_id = _seed_one_job(streamlit_data_env / "data" / "jobs.db")
-    monkeypatch.setattr("jobs.ui_actions.generate_tailored_docx_for_job", MagicMock(side_effect=SystemExit()))
+    mock_tailor = MagicMock(side_effect=SystemExit())
+    monkeypatch.setattr("jobs.ui_actions.generate_tailored_docx_for_job", mock_tailor)
 
     at = AppTest.from_file(INTAKE_PY)
     # The tailor button only renders once extraction/resolved_employer/saved_job_id
@@ -84,6 +85,10 @@ def test_intake_page_shows_error_display_text_for_empty_message_exception(stream
 
     assert len(at.error) == 1
     assert "SystemExit" in at.error[0].value
+    # No pre-existing docx cache was seeded, so the button reads "Generate"
+    # (not "Regenerate") - force should be False here (see
+    # spec-force-regenerate-control.md for the True case).
+    assert mock_tailor.call_args.kwargs["force"] is False
 
 
 def test_jobs_list_page_shows_error_display_text_for_empty_message_exception(streamlit_data_env, monkeypatch):
@@ -103,5 +108,6 @@ def test_jobs_list_page_shows_error_display_text_for_empty_message_exception(str
     at.button(key=f"tailor_{second_job_id}").click().run()
 
     assert mock_tailor.call_args[0][0] == second_job_id
+    assert mock_tailor.call_args.kwargs["force"] is False
     assert len(at.error) == 1
     assert "SystemExit" in at.error[0].value
