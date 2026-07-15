@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from jobs.ui_actions import error_display_text
 from register.cli import DEFAULT_DB, DEFAULT_SOURCE
 from register.db import connect, count, get_current_source_updated, is_noop_refresh
 from register.ingest import ingest
@@ -47,7 +48,7 @@ try:
     finally:
         conn.close()
 except Exception as exc:
-    st.error(str(exc))
+    st.error(error_display_text(exc))
     st.stop()
 
 
@@ -73,7 +74,7 @@ def _confirm_refresh_dialog() -> None:
                     fetch_conn.close()
                 summary = ingest(DEFAULT_SOURCE, DEFAULT_DB)
             except Exception as exc:
-                st.error(str(exc))
+                st.error(error_display_text(exc))
             else:
                 summary["previous_source_updated"] = previous_source_updated
                 st.session_state["register_refresh_result"] = summary
@@ -125,7 +126,7 @@ def _register_pending_profile() -> None:
         finally:
             conn.close()
     except Exception as exc:
-        st.error(str(exc))
+        st.error(error_display_text(exc))
         st.session_state["cv_registration_in_progress"] = False
         return
     st.session_state["last_registered_cv_file_id"] = pending["file_id"]
@@ -192,7 +193,7 @@ if register_clicked and not already_registered and not cv_registration_in_progre
         with st.spinner("Extracting profile from your CV..."):
             profile = extract_profile(raw_text)
     except Exception as exc:
-        st.error(str(exc))
+        st.error(error_display_text(exc))
         st.session_state["cv_registration_in_progress"] = False
     else:
         st.session_state["pending_cv_profile"] = {

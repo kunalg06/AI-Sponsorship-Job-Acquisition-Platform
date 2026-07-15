@@ -38,6 +38,8 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-tailored-content-file-only-storage.md`
   summary: `_cmd_tailor` (and the shared tailoring-generation path) assumes `TailoredApplication.evidence_notes`/`.portfolio_gaps` are always lists with no defensive check; every test mocks the LLM call so this assumption is never exercised against a malformed real response.
   evidence: Flagged in round-2 adversarial review (2026-07-12). Pre-existing assumption that predates this refactor (relies on the `TailoredApplication` pydantic model's contract) — not caused by this diff, just surfaced incidentally while reviewing it.
+  status: done 2026-07-15
+  resolution: Manual sweep triage (2026-07-15) found the premise didn't hold — `TailoredApplication` (`src/jobs/tailor.py:35-39`) is a pydantic `BaseModel` with `evidence_notes: list[str]`/`portfolio_gaps: list[str]`, parsed via `TailoredApplication.model_validate_json(...)` (`tailor.py:92`). A malformed real LLM response fails loudly with a pydantic `ValidationError` at the parse boundary; it can't silently reach `_cmd_tailor` as a bad assumption. No code change needed.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-tailored-content-file-only-storage.md`
   summary: None of the `.txt`/`.docx` write paths in `jobs/cli.py` (tailoring output, legacy-migration backup) use a temp-file-then-rename pattern, so a crash mid-write can leave a partial file that still passes the "does it exist" cache/already-generated checks used throughout this codebase.
@@ -85,6 +87,8 @@
 
 - source_spec: none
   summary: `st.error(str(exc))` — used identically across every view in this codebase, including the new Admin page — can render a blank error box for any exception whose `str()` happens to be empty (e.g. some `OSError`/`HTTPError` subclasses), giving the user no information about what went wrong.
+  status: done 2026-07-15
+  resolution: Implemented via `_bmad-output/implementation-artifacts/spec-error-display-hardening.md` — new `error_display_text(exc: BaseException) -> str` helper in `src/jobs/ui_actions.py` (falls back to `f"{type(exc).__name__}: (no error message)"` when `str(exc).strip()` is empty; also swallows a `__str__` that itself raises). Routed through all 10 sites: `views/admin.py` (4), `views/intake.py` (2), `views/jobs_list.py` (4). Typed `BaseException` rather than `Exception` since 6 of the 10 sites pass a caught `SystemExit`. 6 new tests in `tests/test_ui_actions.py` (non-empty passthrough, empty, whitespace-only, `SystemExit`, and a broken-`__str__` exception). 186/186 tests passing. `grep -rn "st.error(str(exc))" views/` returns no matches.
   evidence: Flagged by the edge-case reviewer of the Admin-page spec (2026-07-12) but applies identically everywhere this pattern is already used (`views/intake.py`, `views/jobs_list.py`), so it's a systemic, pre-existing pattern rather than something specific to any one diff.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-admin-cv-upload-resume-registration.md`
@@ -152,3 +156,11 @@
   evidence: Flagged in the Edge Case Hunter review (2026-07-14), found incidentally while tracing the same write pattern outward from the diff. Real and arguably higher-priority than the CLI path this spec covers, but explicitly out of scope (this spec's Non-goals limited it to the four named `jobs/cli.py` sites) - worth a follow-up spec given it's the UI's primary entry point.
   status: done 2026-07-14
   resolution: Implemented via `_bmad-output/implementation-artifacts/spec-docx-and-ui-outreach-atomic-writes.md` (CAP-2) — `src/jobs/ui_actions.py`'s `draft_and_save_outreach` (note: the file lives at `src/jobs/ui_actions.py`, not `views/ui_actions.py` as this entry's summary said; it's imported into `views/intake.py`/`views/jobs_list.py`) now reuses `jobs.cli._atomic_write_text` and wraps the write in `try/except (OSError, ValueError)`, raising `SystemExit` with the drafted text embedded directly in the message — not `print()`'d like the CLI fix, since a Streamlit user never sees server stdout, only `st.error(str(exc))`. New `tests/test_ui_actions.py` (this module had zero prior coverage) verifies both the happy path and that a failure's exception message contains the recoverable text. 180/180 tests passing.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-error-display-hardening.md`
+  summary: No test asserts that `views/admin.py`/`views/intake.py`/`views/jobs_list.py` actually call the new `error_display_text` helper at their 10 error-display sites — all test coverage is at the helper's unit level, so a future typo or partial revert at any call site would regress silently past the full suite.
+  evidence: Flagged in the Blind Hunter adversarial review (2026-07-15) of the error-display-hardening diff. Not trivially fixable: `views/*.py` are Streamlit page scripts that execute top-level code as a side effect of import (same reason `app.py`'s secrets-bridging logic has no test — see the separate deferred entry on that), so asserting call-site wiring would need either a Streamlit AppTest harness or extracting the error-handling logic out of the view scripts — a real testing-infrastructure decision, not a one-line patch.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-error-display-hardening.md`
+  summary: `error_display_text`'s fallback string (`f"{type(exc).__name__}: (no error message)"`) reads like an internal repr rather than user-facing copy, and doesn't surface `__cause__`/`__context__` when the empty-message exception was chained from a more informative one.
+  evidence: Flagged in the Blind Hunter adversarial review (2026-07-15). Explicitly out of this spec's scope (Non-goals: "not... a redesign of error presentation" — the spec's CAP-2 only requires the fallback be non-empty and name the exception type, which it does). Worth revisiting if users report the fallback itself being unhelpful in practice.

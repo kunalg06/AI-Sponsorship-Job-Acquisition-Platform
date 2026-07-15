@@ -28,7 +28,7 @@ from jobs.sponsor_check import (
     check_sponsor_status,
 )
 from jobs.tracker import APPLIED, DISCARDED, days_since, due_milestone
-from jobs.ui_actions import draft_and_save_outreach, generate_tailored_docx_for_job
+from jobs.ui_actions import draft_and_save_outreach, error_display_text, generate_tailored_docx_for_job
 from register.db import OVERRIDE_ACTIVE, OVERRIDE_INACTIVE, OVERRIDE_LAPSED, OVERRIDE_UNCONFIRMED
 from register.db import connect as connect_register
 from register.db import lookup as register_lookup
@@ -366,7 +366,7 @@ if extraction:
                         try:
                             out_dir, warning = generate_tailored_docx_for_job(saved_job_id, JOBS_DB, PROFILE_DB)
                         except SystemExit as exc:
-                            st.error(str(exc))
+                            st.error(error_display_text(exc))
                         else:
                             st.success(f"Saved to {out_dir}/")
                             if warning:
@@ -452,7 +452,7 @@ if extraction:
                                     PROFILE_DB,
                                 )
                             except SystemExit as exc:
-                                st.error(str(exc))
+                                st.error(error_display_text(exc))
                             except OutreachLengthError as exc:
                                 st.error(
                                     f"Draft rejected: {exc.char_count} chars, over the {exc.limit}-char "

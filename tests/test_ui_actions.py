@@ -17,7 +17,7 @@ from jobs.extract import JobExtraction
 from jobs.outreach import LINKEDIN_NOTE, OutreachDraft
 from jobs.outreach_db import ensure_schema as ensure_outreach_schema
 from jobs.outreach_db import list_outreach_messages
-from jobs.ui_actions import _outreach_message_path, draft_and_save_outreach
+from jobs.ui_actions import _outreach_message_path, draft_and_save_outreach, error_display_text
 from resume.db import connect as connect_profile
 from resume.db import insert_narrative, insert_profile
 from resume.extract import ResumeProfile
@@ -142,3 +142,45 @@ def test_draft_and_save_outreach_write_failure_after_db_commit_raises_error_cont
     finally:
         conn.close()
     assert len(messages) == 1
+
+
+def test_error_display_text_returns_str_exc_unchanged_when_non_empty():
+    exc = ValueError("disk full")
+    assert error_display_text(exc) == "disk full"
+
+
+def test_error_display_text_falls_back_to_type_name_when_str_exc_is_empty():
+    exc = OSError()
+    assert str(exc) == ""
+
+    text = error_display_text(exc)
+
+    assert text != ""
+    assert "OSError" in text
+
+
+def test_error_display_text_falls_back_to_type_name_when_str_exc_is_whitespace_only():
+    exc = ValueError("   ")
+
+    text = error_display_text(exc)
+
+    assert text.strip() != ""
+    assert "ValueError" in text
+
+
+def test_error_display_text_handles_system_exit_unchanged_when_non_empty():
+    # SystemExit is what most real call sites (views/intake.py, views/jobs_list.py)
+    # actually pass - it's a BaseException, not an Exception subclass.
+    exc = SystemExit("No job #99 found in data/jobs.db")
+    assert error_display_text(exc) == "No job #99 found in data/jobs.db"
+
+
+def test_error_display_text_survives_a_str_that_itself_raises():
+    class BrokenStr(Exception):
+        def __str__(self):
+            raise RuntimeError("__str__ is broken")
+
+    text = error_display_text(BrokenStr())
+
+    assert text != ""
+    assert "BrokenStr" in text

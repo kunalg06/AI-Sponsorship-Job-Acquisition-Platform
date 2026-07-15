@@ -19,7 +19,7 @@ from jobs.outreach_db import ensure_schema as ensure_outreach_schema
 from jobs.outreach_db import insert_contact, list_contacts, list_outreach_messages
 from jobs.sponsor_check import CANNOT_VERIFY, CONFIRMED, FUZZY_MATCH, NOT_FOUND, USER_CONFIRMED, USER_FLAGGED
 from jobs.tracker import APPLIED, DISCARDED, days_since, due_milestone
-from jobs.ui_actions import draft_and_save_outreach, generate_tailored_docx_for_job
+from jobs.ui_actions import draft_and_save_outreach, error_display_text, generate_tailored_docx_for_job
 
 JOBS_DB = "data/jobs.db"
 PROFILE_DB = "data/profile.db"
@@ -102,7 +102,7 @@ with st.expander("\U0001f4ec Application Tracker (day 3 / 7 / 14 follow-ups)"):
                         try:
                             contact_id, contact_name, contact_title = _resolve_contact(jobs_conn, tracked_job, None)
                         except SystemExit as exc:
-                            st.error(str(exc))
+                            st.error(error_display_text(exc))
                         else:
                             tracker_purpose = (
                                 f"Day {milestone} polite follow-up: you applied to this role {days} days "
@@ -121,7 +121,7 @@ with st.expander("\U0001f4ec Application Tracker (day 3 / 7 / 14 follow-ups)"):
                                     PROFILE_DB,
                                 )
                             except SystemExit as exc:
-                                st.error(str(exc))
+                                st.error(error_display_text(exc))
                             except OutreachLengthError as exc:
                                 st.error(
                                     f"Draft rejected: {exc.char_count} chars, over the {exc.limit}-char "
@@ -285,7 +285,7 @@ else:
                 try:
                     out_dir, warning = generate_tailored_docx_for_job(job["id"], JOBS_DB, PROFILE_DB)
                 except SystemExit as exc:
-                    st.error(str(exc))
+                    st.error(error_display_text(exc))
                 else:
                     st.success(f"Saved to {out_dir}/")
                     if warning:
@@ -371,7 +371,7 @@ else:
                             PROFILE_DB,
                         )
                     except SystemExit as exc:
-                        st.error(str(exc))
+                        st.error(error_display_text(exc))
                     except OutreachLengthError as exc:
                         st.error(
                             f"Draft rejected: {exc.char_count} chars, over the {exc.limit}-char "
