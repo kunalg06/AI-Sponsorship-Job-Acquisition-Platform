@@ -2019,7 +2019,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "python-docx" },
     { name = "python-dotenv" },
-    { name = "streamlit" },
+    { name = "streamlit", specifier = ">=1.31" },
 ]
 provides-extras = ["dev"]
 
