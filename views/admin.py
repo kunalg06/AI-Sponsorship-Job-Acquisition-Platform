@@ -139,7 +139,17 @@ def _register_pending_profile() -> None:
     st.rerun()
 
 
-@st.dialog("Confirm new profile replaces current one")
+def _clear_pending_cv_profile() -> None:
+    """Shared by the Cancel button and the dialog's `on_dismiss` - X/backdrop/
+    ESC dismissal must clear the same state Cancel does, or the dialog
+    reopens on the next rerun (it's gated on `pending_cv_profile` staying
+    set). Idempotent (safe to call more than once for one dismissal) since
+    both operations are already a no-op on an already-cleared state."""
+    st.session_state.pop("pending_cv_profile", None)
+    st.session_state["cv_registration_in_progress"] = False
+
+
+@st.dialog("Confirm new profile replaces current one", on_dismiss=_clear_pending_cv_profile)
 def _confirm_supersede_dialog(pending: dict, current: ResumeProfile) -> None:
     st.write(
         f"**Current latest profile:** {current.full_name or '(name not stated)'} — {current.seniority}\n\n"
@@ -149,8 +159,7 @@ def _confirm_supersede_dialog(pending: dict, current: ResumeProfile) -> None:
     )
     col1, col2 = st.columns(2)
     if col1.button("Cancel"):
-        st.session_state.pop("pending_cv_profile", None)
-        st.session_state["cv_registration_in_progress"] = False
+        _clear_pending_cv_profile()
         st.rerun()
     if col2.button("Yes, replace it", type="primary"):
         _register_pending_profile()
