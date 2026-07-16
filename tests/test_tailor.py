@@ -163,3 +163,36 @@ def test_generate_tailored_application_does_not_catch_unrelated_exceptions():
 
     with pytest.raises(KeyError):
         generate_tailored_application("job text", "Acme", "resume text", [], client=fake_client)
+
+
+def test_generate_tailored_application_prints_original_traceback_to_stderr(capsys):
+    fake_client = MagicMock()
+    fake_client.interactions.create.side_effect = httpx.ConnectError("Connection refused")
+
+    with pytest.raises(SystemExit, match="Tailoring generation failed"):
+        generate_tailored_application("job text", "Acme", "resume text", [], client=fake_client)
+
+    captured = capsys.readouterr()
+    assert "ConnectError" in captured.err
+    assert "Connection refused" in captured.err
+    # Confirms this is the real call-site traceback, not just a matching
+    # exception type/message from anywhere.
+    assert "generate_tailored_application" in captured.err
+    assert captured.out == ""
+
+
+def test_generate_tailored_application_prints_original_traceback_to_stderr_on_malformed_response(capsys):
+    # The ValidationError here originates deeper in the try block (inside
+    # model_validate_json), a structurally different path from a side_effect
+    # raised at the mocked call site above.
+    fake_response = MagicMock(output_text="{}")
+    fake_client = MagicMock()
+    fake_client.interactions.create.return_value = fake_response
+
+    with pytest.raises(SystemExit, match="Tailoring generation failed"):
+        generate_tailored_application("job text", "Acme", "resume text", [], client=fake_client)
+
+    captured = capsys.readouterr()
+    assert "ValidationError" in captured.err
+    assert "generate_tailored_application" in captured.err
+    assert captured.out == ""

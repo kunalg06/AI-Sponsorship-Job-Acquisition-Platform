@@ -195,6 +195,41 @@ def test_generate_paragraph_edits_does_not_catch_unrelated_exceptions():
         generate_paragraph_edits(paragraphs, "job text", "Acme Corp", client=fake_client)
 
 
+def test_generate_paragraph_edits_prints_original_traceback_to_stderr(capsys):
+    fake_client = MagicMock()
+    fake_client.interactions.create.side_effect = httpx.ConnectError("Connection refused")
+    paragraphs = [SourceParagraph(index=0, text="JANE DOE")]
+
+    with pytest.raises(SystemExit, match="Resume paragraph tailoring failed"):
+        generate_paragraph_edits(paragraphs, "job text", "Acme Corp", client=fake_client)
+
+    captured = capsys.readouterr()
+    assert "ConnectError" in captured.err
+    assert "Connection refused" in captured.err
+    # Confirms this is the real call-site traceback, not just a matching
+    # exception type/message from anywhere.
+    assert "generate_paragraph_edits" in captured.err
+    assert captured.out == ""
+
+
+def test_generate_paragraph_edits_prints_original_traceback_to_stderr_on_malformed_response(capsys):
+    # The ValidationError here originates deeper in the try block (inside
+    # model_validate_json), a structurally different path from a side_effect
+    # raised at the mocked call site above.
+    fake_response = MagicMock(output_text="{}")
+    fake_client = MagicMock()
+    fake_client.interactions.create.return_value = fake_response
+    paragraphs = [SourceParagraph(index=0, text="JANE DOE")]
+
+    with pytest.raises(SystemExit, match="Resume paragraph tailoring failed"):
+        generate_paragraph_edits(paragraphs, "job text", "Acme Corp", client=fake_client)
+
+    captured = capsys.readouterr()
+    assert "ValidationError" in captured.err
+    assert "generate_paragraph_edits" in captured.err
+    assert captured.out == ""
+
+
 def test_build_tailored_docx_preserves_formatting_and_changes_text(tmp_path):
     source = tmp_path / "resume.docx"
     _make_resume_docx(source)

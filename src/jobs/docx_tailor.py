@@ -24,6 +24,8 @@ from __future__ import annotations
 import io
 import os
 import re
+import sys
+import traceback
 import uuid
 import zipfile
 from dataclasses import dataclass
@@ -161,6 +163,14 @@ def generate_paragraph_edits(
         RuntimeError,  # covers the SDK's bare RuntimeError when no API credentials resolve
     ) as exc:
         detail = str(exc).strip() or type(exc).__name__
+        # Server-side diagnostic only: the Streamlit UI only ever sees `detail`
+        # above via SystemExit, so the full original traceback would otherwise
+        # be lost. Never let this diagnostic itself break the SystemExit
+        # contract callers rely on.
+        try:
+            traceback.print_exc(file=sys.stderr)
+        except Exception:
+            pass
         raise SystemExit(f"Resume paragraph tailoring failed: {detail}") from exc
 
 
