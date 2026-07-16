@@ -31,8 +31,10 @@ from pathlib import Path
 from typing import Literal, Optional
 
 import docx
+import httpx
 from google import genai
-from pydantic import BaseModel
+from google.genai import errors as genai_errors
+from pydantic import BaseModel, ValidationError
 
 MODEL = "gemini-3.5-flash"
 
@@ -138,18 +140,28 @@ def generate_paragraph_edits(
 ) -> dict[int, str]:
     """Returns {paragraph_index: new_text} only for paragraphs marked 'rewrite'."""
     client = client or genai.Client()
-    interaction = client.interactions.create(
-        model=MODEL,
-        system_instruction=_SYSTEM_INSTRUCTION,
-        input=_build_input(paragraphs, job_raw_text, company_name),
-        response_format={
-            "type": "text",
-            "mime_type": "application/json",
-            "schema": TailoredResumeEdits.model_json_schema(),
-        },
-    )
-    result = TailoredResumeEdits.model_validate_json(interaction.output_text)
-    return {edit.index: edit.text for edit in result.edits if edit.action == "rewrite" and edit.text}
+    try:
+        interaction = client.interactions.create(
+            model=MODEL,
+            system_instruction=_SYSTEM_INSTRUCTION,
+            input=_build_input(paragraphs, job_raw_text, company_name),
+            response_format={
+                "type": "text",
+                "mime_type": "application/json",
+                "schema": TailoredResumeEdits.model_json_schema(),
+            },
+        )
+        result = TailoredResumeEdits.model_validate_json(interaction.output_text)
+        return {edit.index: edit.text for edit in result.edits if edit.action == "rewrite" and edit.text}
+    except (
+        genai_errors.APIError,
+        genai_errors.UnknownApiResponseError,
+        httpx.HTTPError,
+        ValidationError,
+        RuntimeError,  # covers the SDK's bare RuntimeError when no API credentials resolve
+    ) as exc:
+        detail = str(exc).strip() or type(exc).__name__
+        raise SystemExit(f"Resume paragraph tailoring failed: {detail}") from exc
 
 
 def _set_paragraph_text_preserving_format(paragraph, new_text: str) -> None:

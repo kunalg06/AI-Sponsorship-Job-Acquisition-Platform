@@ -1,7 +1,9 @@
 from unittest.mock import MagicMock
 
 import docx
+import httpx
 import pytest
+from google.genai import errors as genai_errors
 
 import jobs.docx_tailor as docx_tailor_module
 from jobs.docx_tailor import (
@@ -104,6 +106,93 @@ def test_generate_paragraph_edits_filters_to_rewrite_only():
     assert kwargs["model"] == MODEL
     assert "job posting text" in kwargs["input"]
     assert "[0] (8 chars) JANE DOE" in kwargs["input"]
+
+
+def test_generate_paragraph_edits_raises_system_exit_on_api_error():
+    fake_client = MagicMock()
+    original = genai_errors.APIError(500, {"message": "Internal error", "status": "INTERNAL"})
+    fake_client.interactions.create.side_effect = original
+    paragraphs = [SourceParagraph(index=0, text="JANE DOE")]
+
+    with pytest.raises(SystemExit, match="Resume paragraph tailoring failed") as exc_info:
+        generate_paragraph_edits(paragraphs, "job text", "Acme Corp", client=fake_client)
+    assert "Internal error" in str(exc_info.value)
+    assert exc_info.value.__cause__ is original
+
+
+def test_generate_paragraph_edits_raises_system_exit_on_network_error():
+    fake_client = MagicMock()
+    original = httpx.ConnectError("Connection refused")
+    fake_client.interactions.create.side_effect = original
+    paragraphs = [SourceParagraph(index=0, text="JANE DOE")]
+
+    with pytest.raises(SystemExit, match="Resume paragraph tailoring failed") as exc_info:
+        generate_paragraph_edits(paragraphs, "job text", "Acme Corp", client=fake_client)
+    assert "Connection refused" in str(exc_info.value)
+    assert exc_info.value.__cause__ is original
+
+
+def test_generate_paragraph_edits_raises_system_exit_on_missing_credentials():
+    fake_client = MagicMock()
+    original = RuntimeError("Could not resolve API token from the environment")
+    fake_client.interactions.create.side_effect = original
+    paragraphs = [SourceParagraph(index=0, text="JANE DOE")]
+
+    with pytest.raises(SystemExit, match="Resume paragraph tailoring failed") as exc_info:
+        generate_paragraph_edits(paragraphs, "job text", "Acme Corp", client=fake_client)
+    assert "Could not resolve API token" in str(exc_info.value)
+    assert exc_info.value.__cause__ is original
+
+
+def test_generate_paragraph_edits_raises_system_exit_on_unknown_api_response():
+    fake_client = MagicMock()
+    original = genai_errors.UnknownApiResponseError("Failed to parse response as JSON.")
+    fake_client.interactions.create.side_effect = original
+    paragraphs = [SourceParagraph(index=0, text="JANE DOE")]
+
+    with pytest.raises(SystemExit, match="Resume paragraph tailoring failed") as exc_info:
+        generate_paragraph_edits(paragraphs, "job text", "Acme Corp", client=fake_client)
+    assert "Failed to parse response as JSON" in str(exc_info.value)
+    assert exc_info.value.__cause__ is original
+
+
+def test_generate_paragraph_edits_raises_system_exit_on_malformed_response():
+    fake_response = MagicMock(output_text="{}")
+    fake_client = MagicMock()
+    fake_client.interactions.create.return_value = fake_response
+    paragraphs = [SourceParagraph(index=0, text="JANE DOE")]
+
+    with pytest.raises(SystemExit, match="Resume paragraph tailoring failed") as exc_info:
+        generate_paragraph_edits(paragraphs, "job text", "Acme Corp", client=fake_client)
+    assert "edits" in str(exc_info.value)
+
+
+def test_generate_paragraph_edits_raises_system_exit_on_non_json_response():
+    fake_response = MagicMock(output_text="not valid json at all")
+    fake_client = MagicMock()
+    fake_client.interactions.create.return_value = fake_response
+    paragraphs = [SourceParagraph(index=0, text="JANE DOE")]
+
+    with pytest.raises(SystemExit, match="Resume paragraph tailoring failed"):
+        generate_paragraph_edits(paragraphs, "job text", "Acme Corp", client=fake_client)
+
+
+def test_generate_paragraph_edits_raises_system_exit_with_type_name_when_error_message_is_empty():
+    fake_client = MagicMock()
+    fake_client.interactions.create.side_effect = httpx.HTTPError("")
+    paragraphs = [SourceParagraph(index=0, text="JANE DOE")]
+
+    with pytest.raises(SystemExit, match="Resume paragraph tailoring failed: HTTPError"):
+        generate_paragraph_edits(paragraphs, "job text", "Acme Corp", client=fake_client)
+
+
+def test_generate_paragraph_edits_does_not_catch_unrelated_exceptions():
+    fake_client = MagicMock()
+    fake_client.interactions.create.side_effect = KeyError("unexpected")
+    paragraphs = [SourceParagraph(index=0, text="JANE DOE")]
+
+    with pytest.raises(KeyError):
+        generate_paragraph_edits(paragraphs, "job text", "Acme Corp", client=fake_client)
 
 
 def test_build_tailored_docx_preserves_formatting_and_changes_text(tmp_path):

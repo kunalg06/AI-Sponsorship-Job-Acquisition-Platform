@@ -10,8 +10,10 @@ from __future__ import annotations
 import hashlib
 from typing import Optional
 
+import httpx
 from google import genai
-from pydantic import BaseModel
+from google.genai import errors as genai_errors
+from pydantic import BaseModel, ValidationError
 
 from resume.github_evidence import RepoEvidence
 
@@ -79,14 +81,24 @@ def generate_tailored_application(
     client: Optional[genai.Client] = None,
 ) -> TailoredApplication:
     client = client or genai.Client()
-    interaction = client.interactions.create(
-        model=MODEL,
-        system_instruction=_SYSTEM_INSTRUCTION,
-        input=_build_input(job_raw_text, company_name, raw_resume_text, repos),
-        response_format={
-            "type": "text",
-            "mime_type": "application/json",
-            "schema": TailoredApplication.model_json_schema(),
-        },
-    )
-    return TailoredApplication.model_validate_json(interaction.output_text)
+    try:
+        interaction = client.interactions.create(
+            model=MODEL,
+            system_instruction=_SYSTEM_INSTRUCTION,
+            input=_build_input(job_raw_text, company_name, raw_resume_text, repos),
+            response_format={
+                "type": "text",
+                "mime_type": "application/json",
+                "schema": TailoredApplication.model_json_schema(),
+            },
+        )
+        return TailoredApplication.model_validate_json(interaction.output_text)
+    except (
+        genai_errors.APIError,
+        genai_errors.UnknownApiResponseError,
+        httpx.HTTPError,
+        ValidationError,
+        RuntimeError,  # covers the SDK's bare RuntimeError when no API credentials resolve
+    ) as exc:
+        detail = str(exc).strip() or type(exc).__name__
+        raise SystemExit(f"Tailoring generation failed: {detail}") from exc
