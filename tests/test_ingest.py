@@ -1,7 +1,21 @@
+import sqlite3
+import threading
+import time
+
 import pytest
 
 from register import ingest as ingest_module
-from register.db import connect, get_current_source_updated, is_noop_refresh, lookup, lookup_contains
+from register.db import (
+    BUSY_TIMEOUT_MS,
+    SponsorRecord,
+    connect,
+    count,
+    get_current_source_updated,
+    is_noop_refresh,
+    lookup,
+    lookup_contains,
+    replace_all,
+)
 from register.normalize import make_match_key
 
 SAMPLE_CSV = (
@@ -132,9 +146,96 @@ def test_connect_sets_busy_timeout_pragma(tmp_path):
     conn = connect(db_path)
     try:
         # PRAGMA busy_timeout with no argument returns the current value (ms).
-        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == BUSY_TIMEOUT_MS
     finally:
         conn.close()
+
+
+def test_busy_timeout_lets_a_concurrent_writer_wait_out_a_held_lock(tmp_path):
+    # Exercises what busy_timeout is actually for - a duration proxy alone
+    # (see test_replace_all_completes_well_within_busy_timeout below) never
+    # touches real lock contention. conn1 holds the write lock; a second
+    # connection's write must wait for it to release, not immediately raise
+    # "database is locked".
+    db_path = tmp_path / "sponsors.db"
+    conn1 = connect(db_path)
+    conn1.execute("BEGIN IMMEDIATE")
+    conn1.execute(
+        "INSERT INTO sponsors (organisation_name, match_key, route) VALUES (?, ?, ?)",
+        ("Holder Ltd", "holderltd", "Skilled Worker"),
+    )
+
+    result: dict = {}
+
+    def waiting_writer():
+        # Its own connection, opened and used entirely on this thread -
+        # sqlite3 connections aren't safe to share across threads.
+        conn2 = connect(db_path)
+        start = time.perf_counter()
+        try:
+            conn2.execute(
+                "INSERT INTO sponsors (organisation_name, match_key, route) VALUES (?, ?, ?)",
+                ("Waiter Ltd", "waiterltd", "Skilled Worker"),
+            )
+            conn2.commit()
+            result["elapsed"] = time.perf_counter() - start
+            result["error"] = None
+        except sqlite3.OperationalError as exc:
+            result["error"] = exc
+        finally:
+            conn2.close()
+
+    waiter = threading.Thread(target=waiting_writer)
+    waiter.start()
+
+    hold_seconds = 0.5
+    time.sleep(hold_seconds)
+    conn1.commit()
+    conn1.close()
+    waiter.join(timeout=BUSY_TIMEOUT_MS / 1000)
+
+    assert result.get("error") is None
+    # Proves the writer actually waited for the lock rather than getting
+    # lucky - it couldn't have completed before conn1 released it.
+    assert result["elapsed"] >= hold_seconds
+
+
+def test_replace_all_completes_well_within_busy_timeout(tmp_path):
+    # register/db.py's busy_timeout is sized against replace_all()'s
+    # real-world cost - this guards that assumption against a future
+    # regression (e.g. a schema change adding an expensive trigger/index)
+    # eroding the safety margin without anyone noticing. A mix of NULL
+    # optional fields and varying name lengths, not uniform rows, since a
+    # regression tied to data shape (not just row count) should show up too.
+    records = [
+        SponsorRecord(
+            organisation_name=f"Company {i} International Holdings Ltd" if i % 5 == 0 else f"Company {i} Ltd",
+            trading_name=f"Co{i}" if i % 3 == 0 else None,
+            match_key=f"company{i}ltd",
+            town_city="London" if i % 2 == 0 else None,
+            county="Greater London" if i % 2 == 0 else None,
+            rating="A rating",
+            route="Skilled Worker",
+            source_updated="2026-07-01",
+        )
+        for i in range(100_000)
+    ]
+
+    conn = connect(tmp_path / "sponsors.db")
+    try:
+        start = time.perf_counter()
+        loaded = replace_all(conn, records)
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        row_count = count(conn)
+    finally:
+        conn.close()
+
+    assert loaded == 100_000
+    assert row_count == 100_000  # loaded is just len(records) - this confirms it actually persisted
+    # Order-of-magnitude margin, not a hair's-breadth pass: a one-off manual
+    # measurement against the real 142k-row register found its worst of 3
+    # trials at 635ms, well under a third of BUSY_TIMEOUT_MS.
+    assert elapsed_ms < BUSY_TIMEOUT_MS / 3
 
 
 def test_get_current_source_updated_returns_none_for_empty_table(tmp_path):

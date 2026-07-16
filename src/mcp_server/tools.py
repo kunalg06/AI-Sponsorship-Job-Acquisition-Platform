@@ -100,7 +100,10 @@ def check_sponsor(employer_name: Optional[str] = None, *, sponsor_db: str = DEFA
     """Look up whether `employer_name` is a licensed UK sponsor."""
     conn = connect_register(sponsor_db)
     try:
-        conn.execute("PRAGMA busy_timeout = 5000")
+        # connect_register() (register.db.connect()) already sets its own
+        # busy_timeout - re-setting it here would silently downgrade it,
+        # defeating the margin it's sized for (unlike connect_jobs() below,
+        # which sets none of its own).
         verdict = check_sponsor_status(conn, employer_name)
         return asdict(verdict)
     finally:

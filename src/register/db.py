@@ -48,6 +48,17 @@ OVERRIDE_LAPSED = "lapsed"
 OVERRIDE_UNCONFIRMED = "unconfirmed"
 OVERRIDE_STATUSES = (OVERRIDE_ACTIVE, OVERRIDE_INACTIVE, OVERRIDE_LAPSED, OVERRIDE_UNCONFIRMED)
 
+# replace_all() wipes and reloads the full ~142k-row register in one
+# transaction; a one-off manual measurement against the real local register
+# (not committed anywhere - see spec-register-busy-timeout-tuning) found its
+# worst of 3 trials at 635ms. 15000ms is ~24x that worst-case trial - a
+# concurrent reader/writer waiting on replace_all()'s write lock gets a
+# comfortable margin for slower/virtualized disk I/O on an unmeasured deploy
+# target (e.g. Streamlit Cloud), at the cost of a real (if rare) tradeoff:
+# any *other* kind of lock contention (a hung/long transaction, not just a
+# normal replace_all()) now blocks up to 3x longer before failing.
+BUSY_TIMEOUT_MS = 15000
+
 
 @dataclass(frozen=True)
 class SponsorRecord:
@@ -67,7 +78,7 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
     conn.executescript(SCHEMA)
     return conn
 
