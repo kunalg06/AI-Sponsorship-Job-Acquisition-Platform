@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Optional
 
 import docx
+from docx.table import Table
 from google import genai
 from pydantic import BaseModel
 
@@ -53,6 +54,37 @@ def extract_profile(raw_resume_text: str, *, client: Optional[genai.Client] = No
     return ResumeProfile.model_validate_json(interaction.output_text)
 
 
+def _row_text(row) -> Optional[str]:
+    """One table row as a ' | '-joined line, deduping horizontally-merged
+    cells (python-docx repeats a merged cell's text once per spanned column,
+    all sharing the same underlying `_tc` element) and flattening any
+    multi-paragraph cell's internal newlines to spaces so a cell's content
+    never gets mistaken for a row/paragraph boundary. Returns None for an
+    all-blank row (e.g. an unfilled template table) so it doesn't inject a
+    stray separator into a document that otherwise has no real content."""
+    seen_tc = None
+    cell_texts = []
+    for cell in row.cells:
+        if cell._tc is seen_tc:
+            continue
+        seen_tc = cell._tc
+        cell_texts.append(cell.text.replace("\n", " "))
+    if not any(text.strip() for text in cell_texts):
+        return None
+    return " | ".join(cell_texts)
+
+
 def extract_text_from_docx(file) -> str:
-    """Pull raw text out of a .docx file (paragraph-join, no formatting)."""
-    return "\n".join(p.text for p in docx.Document(file).paragraphs)
+    """Pull raw text out of a .docx file: paragraphs and table content, in
+    original document order (not paragraphs-then-tables), since a CV can
+    interleave prose with a skills/dates table. Headers, footers, text boxes,
+    and content-control-wrapped (`w:sdt`) sections are not read - rarer in
+    CVs and a different python-docx API."""
+    document = docx.Document(file)
+    lines: list[str] = []
+    for item in document.iter_inner_content():
+        if isinstance(item, Table):
+            lines.extend(text for row in item.rows if (text := _row_text(row)) is not None)
+        else:
+            lines.append(item.text)
+    return "\n".join(lines)
