@@ -25,6 +25,8 @@ a real update.
 
 from __future__ import annotations
 
+import hashlib
+
 import streamlit as st
 
 from jobs.ui_actions import error_display_text
@@ -129,7 +131,7 @@ def _register_pending_profile() -> None:
         st.error(error_display_text(exc))
         st.session_state["cv_registration_in_progress"] = False
         return
-    st.session_state["last_registered_cv_file_id"] = pending["file_id"]
+    st.session_state["last_registered_cv_hash"] = pending["content_hash"]
     st.session_state["cv_registration_in_progress"] = False
     st.session_state["cv_registration_result"] = {
         "profile_id": profile_id,
@@ -167,9 +169,24 @@ def _confirm_supersede_dialog(pending: dict, current: ResumeProfile) -> None:
 
 uploaded_file = st.file_uploader("Upload your CV", type=["docx", "txt"])
 
+# Hash of the raw bytes, not the extracted text - can't fail the way text
+# extraction can (no parsing), so this identity check costs nothing extra
+# and can't change when a corrupt file's error surfaces. Content-based (not
+# `uploaded_file.file_id`, a widget identity that changes on every fresh
+# pick from disk) so re-selecting the *same bytes* via the OS file picker is
+# still recognized as already registered. Narrower than "same logical CV":
+# a re-save by a different Word/LibreOffice version can change bytes (e.g.
+# XML metadata/timestamps) without changing visible content, and would hash
+# differently - accepted, not fixed, since catching that needs the extracted
+# text this check deliberately avoids depending on.
+uploaded_content_hash = hashlib.sha256(uploaded_file.getvalue()).hexdigest() if uploaded_file is not None else None
+
 already_registered = (
+    # The `uploaded_file is not None` check isn't redundant with the hash
+    # comparison - drop it and a no-file state (both sides None) would
+    # misread as "already registered".
     uploaded_file is not None
-    and st.session_state.get("last_registered_cv_file_id") == uploaded_file.file_id
+    and st.session_state.get("last_registered_cv_hash") == uploaded_content_hash
 )
 cv_registration_in_progress = st.session_state.get("cv_registration_in_progress", False)
 
@@ -208,7 +225,7 @@ if register_clicked and not already_registered and not cv_registration_in_progre
         st.session_state["pending_cv_profile"] = {
             "raw_text": raw_text,
             "profile": profile,
-            "file_id": uploaded_file.file_id,
+            "content_hash": uploaded_content_hash,
         }
         if latest_profile is None:
             # Nothing to supersede yet - register directly, no confirmation needed.

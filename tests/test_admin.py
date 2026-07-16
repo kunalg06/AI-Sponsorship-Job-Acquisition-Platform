@@ -3,9 +3,11 @@ error-display regression checks."""
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import re
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from streamlit.testing.v1 import AppTest
 
@@ -39,7 +41,7 @@ def test_clear_pending_cv_profile_clears_both_session_state_keys(streamlit_data_
     admin = _load_admin_module()
     import streamlit as st
 
-    st.session_state["pending_cv_profile"] = {"raw_text": "resume text", "profile": None, "file_id": "abc"}
+    st.session_state["pending_cv_profile"] = {"raw_text": "resume text", "profile": None, "content_hash": "abc"}
     st.session_state["cv_registration_in_progress"] = True
     try:
         admin._clear_pending_cv_profile()
@@ -86,7 +88,7 @@ def test_cancel_button_clears_pending_cv_profile_through_the_real_dialog(streaml
     at.session_state["pending_cv_profile"] = {
         "raw_text": "new resume text",
         "profile": ResumeProfile(seniority="mid", core_skills=[], domains=[], past_roles=[], summary="new"),
-        "file_id": "file-abc",
+        "content_hash": "deadbeef",
     }
     at.session_state["cv_registration_in_progress"] = True
     at.run()
@@ -97,3 +99,64 @@ def test_cancel_button_clears_pending_cv_profile_through_the_real_dialog(streaml
     assert not at.error
     assert "pending_cv_profile" not in at.session_state
     assert at.session_state["cv_registration_in_progress"] is False
+
+
+def test_reselecting_the_same_cv_file_via_a_fresh_upload_is_recognized_as_already_registered(streamlit_data_env):
+    # Fast, hand-seeded check of the read/comparison side only (does
+    # already_registered correctly compare against a pre-set hash). Does not
+    # prove the write side (_register_pending_profile actually storing a
+    # matching hash) or that a fresh upload really does mint a new file_id -
+    # see the end-to-end test below for both of those.
+    content = b"Jane Doe\nSenior ML Engineer\nSkills: Python, PyTorch"
+
+    at = AppTest.from_file(str(_ADMIN_PY))
+    at.session_state["last_registered_cv_hash"] = hashlib.sha256(content).hexdigest()
+    at.run()
+    at.file_uploader[0].set_value(("resume.txt", content, "text/plain"))
+    at.run()
+
+    assert not at.error
+    assert any("already been registered" in info.value for info in at.info)
+    register_button = next(b for b in at.button if b.label == "Extract & Register Profile")
+    assert register_button.proto.disabled is True
+
+
+def test_registering_then_reuploading_the_same_bytes_end_to_end_is_recognized_as_already_registered(
+    streamlit_data_env, monkeypatch
+):
+    # Drives the real registration path (not a hand-seeded hash) end to end,
+    # covering both halves of the SPEC's success signal: the still-held
+    # upload staying recognized across reruns, and a fresh re-upload of the
+    # same bytes (a genuinely new file_id, verified below, not just assumed)
+    # also being recognized once the guard has something registered to
+    # compare against.
+    content = b"Jane Doe\nSenior ML Engineer\nSkills: Python, PyTorch"
+    mock_extract = MagicMock(
+        return_value=ResumeProfile(seniority="senior", core_skills=[], domains=[], past_roles=[], summary="s")
+    )
+    monkeypatch.setattr("resume.extract.extract_profile", mock_extract)
+
+    at = AppTest.from_file(str(_ADMIN_PY))
+    at.run()
+    at.file_uploader[0].set_value(("resume.txt", content, "text/plain"))
+    at.run()
+    first_file_id = at.file_uploader[0].value.file_id
+
+    register_button = next(b for b in at.button if b.label == "Extract & Register Profile")
+    register_button.click().run()
+
+    assert not at.error
+    assert at.session_state["last_registered_cv_hash"] == hashlib.sha256(content).hexdigest()
+
+    # Still-held upload, no re-selection: stays recognized across a rerun
+    # triggered by something else entirely (e.g. clicking another button).
+    at.run()
+    assert any("already been registered" in info.value for info in at.info)
+
+    # Fresh re-selection of the identical bytes: a genuinely new file_id
+    # (verified, not assumed), still recognized via content, not identity.
+    at.file_uploader[0].set_value(("resume.txt", content, "text/plain"))
+    at.run()
+    second_file_id = at.file_uploader[0].value.file_id
+    assert second_file_id != first_file_id
+    assert any("already been registered" in info.value for info in at.info)
