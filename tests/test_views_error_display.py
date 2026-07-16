@@ -63,7 +63,7 @@ def test_admin_page_shows_error_display_text_for_empty_message_exception(streaml
 
 
 def test_intake_page_shows_error_display_text_for_empty_message_exception(streamlit_data_env, monkeypatch):
-    job_id = _seed_one_job(streamlit_data_env / "data" / "jobs.db")
+    job_id = _seed_one_job(streamlit_data_env["jobs_db"])
     mock_tailor = MagicMock(side_effect=SystemExit())
     monkeypatch.setattr("jobs.ui_actions.generate_tailored_docx_for_job", mock_tailor)
 
@@ -96,7 +96,7 @@ def test_jobs_list_page_shows_error_display_text_for_empty_message_exception(str
     # *second* job's id was passed - a mock that merely raises regardless of
     # args can't catch a wrong-loop-variable/closure bug that wires the
     # tailor button to the wrong job_id; asserting the argument can.
-    jobs_db_path = streamlit_data_env / "data" / "jobs.db"
+    jobs_db_path = streamlit_data_env["jobs_db"]
     _seed_one_job(jobs_db_path)
     second_job_id = _seed_one_job(jobs_db_path)
     mock_tailor = MagicMock(side_effect=SystemExit())

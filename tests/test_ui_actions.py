@@ -332,7 +332,7 @@ def test_jobs_list_regenerate_button_passes_force_true_when_docx_cache_already_e
     at the actual views/jobs_list.py call site (e.g. reverting to a
     hardcoded force=False, or inverting the boolean). This drives the real
     page via AppTest instead."""
-    job_id = _seed_job_with_existing_docx_cache(streamlit_data_env / "data" / "jobs.db")
+    job_id = _seed_job_with_existing_docx_cache(streamlit_data_env["jobs_db"])
     mock_tailor = MagicMock(side_effect=SystemExit())
     monkeypatch.setattr("jobs.ui_actions.generate_tailored_docx_for_job", mock_tailor)
 
@@ -346,7 +346,7 @@ def test_jobs_list_regenerate_button_passes_force_true_when_docx_cache_already_e
 
 
 def test_intake_regenerate_button_passes_force_true_when_docx_cache_already_exists(streamlit_data_env, monkeypatch):
-    job_id = _seed_job_with_existing_docx_cache(streamlit_data_env / "data" / "jobs.db")
+    job_id = _seed_job_with_existing_docx_cache(streamlit_data_env["jobs_db"])
     mock_tailor = MagicMock(side_effect=SystemExit())
     monkeypatch.setattr("jobs.ui_actions.generate_tailored_docx_for_job", mock_tailor)
 
