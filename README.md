@@ -33,6 +33,8 @@ Create a `.env` file in the project root with your Gemini API key:
 GEMINI_API_KEY=your-key-here
 ```
 
+Optionally, set `GENERATED_CV_DIR` to relocate where tailored resumes/cover letters and drafted outreach messages are written (defaults to `cv/generated_cv`). Setting it once keeps the CLI's own `--out-dir` defaults and the Streamlit UI pointed at the same directory — an explicit `--out-dir` passed to a single CLI invocation still overrides it for that command only.
+
 ## Running the app
 
 ```bash

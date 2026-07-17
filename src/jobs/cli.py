@@ -74,7 +74,31 @@ DEFAULT_SPONSOR_DB = "data/sponsors.db"
 DEFAULT_PROFILE_DB = "data/profile.db"
 DEFAULT_TAILOR_OUT_DIR = "data/tailored"
 DEFAULT_SOURCE_RESUME_DIR = "cv/my-resume"
-DEFAULT_GENERATED_CV_DIR = "cv/generated_cv"
+
+
+def _resolve_generated_cv_dir() -> str:
+    """Reads GENERATED_CV_DIR from the environment (see app.py's st.secrets
+    bridge for the Streamlit Cloud case), falling back to the historical
+    default. `.strip()` also falls back on an empty/whitespace-only value
+    (e.g. a stray "GENERATED_CV_DIR=" left in .env), not just when unset -
+    Path("") would otherwise silently resolve to the process cwd. Kept as
+    its own function rather than inlined into the constant below so it can
+    be unit-tested directly without reloading this module: this file is
+    imported early and widely (ui_actions.py, every view), and reloading it
+    leaves their own `from jobs.cli import ...` bindings pointing at
+    pre-reload objects - confirmed to cause real cross-test breakage
+    elsewhere in this suite during development of this function."""
+    return os.environ.get("GENERATED_CV_DIR", "").strip() or "cv/generated_cv"
+
+
+# Every --out-dir default below AND every UI read/write site (jobs/ui_actions.py,
+# views/jobs_list.py, views/intake.py) import this same constant unmodified -
+# setting GENERATED_CV_DIR once (in .env, or via app.py's st.secrets bridge on
+# Streamlit Cloud) keeps the CLI's own defaults and the UI pointed at the same
+# directory. An explicit --out-dir passed to a single CLI invocation still
+# deliberately overrides this per-command, same as before - only the *default*
+# both sides fall back to is unified, not every possible invocation.
+DEFAULT_GENERATED_CV_DIR = _resolve_generated_cv_dir()
 
 
 def _read_input(args: argparse.Namespace) -> str:

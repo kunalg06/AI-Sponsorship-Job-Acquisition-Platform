@@ -35,6 +35,15 @@ if "GEMINI_API_KEY" not in os.environ:
         file=sys.stderr,
     )
 
+# Same bridge as GEMINI_API_KEY above, for jobs.cli.DEFAULT_GENERATED_CV_DIR's
+# optional GENERATED_CV_DIR override - unlike the API key, this one has a
+# working default (cv/generated_cv), so there's no matching "not found" warning.
+if "GENERATED_CV_DIR" not in os.environ:
+    try:
+        os.environ["GENERATED_CV_DIR"] = st.secrets["GENERATED_CV_DIR"]
+    except Exception:
+        pass
+
 st.set_page_config(page_title="Sponsorship Job Assistant", page_icon="\U0001f9ed", layout="centered")
 
 pg = st.navigation(

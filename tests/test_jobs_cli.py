@@ -11,6 +11,7 @@ Spec Change Log for the full story.
 from __future__ import annotations
 
 import builtins
+import os
 import sqlite3
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -161,6 +162,70 @@ def _get_job_row(jobs_db_path, job_id):
         return get_job(conn, job_id)
     finally:
         conn.close()
+
+
+# --------------------------------------------------------------------------
+# `_resolve_generated_cv_dir` / `DEFAULT_GENERATED_CV_DIR` - GENERATED_CV_DIR
+# env var override. Tests call `_resolve_generated_cv_dir()` directly rather
+# than reloading jobs.cli: `DEFAULT_GENERATED_CV_DIR` is a module-level
+# constant evaluated once at import time, and jobs.cli is a single shared
+# module object every other test file in this suite also imports via
+# `from jobs.cli import ...` - `importlib.reload(jobs_cli)` mutates it in
+# place but leaves those other files' already-bound copies (of this constant
+# AND of unrelated functions/classes) pointing at pre-reload objects,
+# confirmed to cause real, unrelated test failures elsewhere in this suite
+# during development of this feature.
+# --------------------------------------------------------------------------
+
+
+def test_resolve_generated_cv_dir_reads_from_env_var_when_set(monkeypatch):
+    monkeypatch.setenv("GENERATED_CV_DIR", "/custom/cv/output")
+
+    assert jobs_cli._resolve_generated_cv_dir() == "/custom/cv/output"
+
+
+def test_resolve_generated_cv_dir_falls_back_to_the_current_default_when_unset(monkeypatch):
+    monkeypatch.delenv("GENERATED_CV_DIR", raising=False)
+
+    assert jobs_cli._resolve_generated_cv_dir() == "cv/generated_cv"
+
+
+def test_resolve_generated_cv_dir_falls_back_when_set_to_an_empty_or_whitespace_value(monkeypatch):
+    # A stray "GENERATED_CV_DIR=" or "GENERATED_CV_DIR=   " left in .env must
+    # not silently resolve to Path("") - the process cwd - scattering
+    # generated files into the repo root instead of failing safely to the
+    # known-good default.
+    monkeypatch.setenv("GENERATED_CV_DIR", "   ")
+
+    assert jobs_cli._resolve_generated_cv_dir() == "cv/generated_cv"
+
+
+def test_default_generated_cv_dir_is_derived_from_the_resolver_not_hardcoded_separately():
+    # Guards against someone reverting the constant's wiring (e.g. back to a
+    # bare string literal) while leaving the resolver function itself
+    # around unused and looking correct in isolation.
+    assert jobs_cli.DEFAULT_GENERATED_CV_DIR == jobs_cli._resolve_generated_cv_dir()
+
+
+def test_tailor_docx_out_dir_default_matches_default_generated_cv_dir():
+    # Proves the CLI-side half of CAP-2: build_parser()'s --out-dir default
+    # for tailor-docx is wired to the shared constant, not a separate
+    # hardcoded string that could drift from it.
+    parser = jobs_cli.build_parser()
+    args = parser.parse_args(["tailor-docx", "1"])
+
+    assert args.out_dir == jobs_cli.DEFAULT_GENERATED_CV_DIR
+
+
+def test_ui_actions_default_generated_cv_dir_matches_jobs_cli():
+    # Proves the UI-side half of CAP-2: ui_actions.py does
+    # `from jobs.cli import DEFAULT_GENERATED_CV_DIR` at its own (real,
+    # one-time) import, so as long as jobs.cli fully initializes - env read
+    # included - before that import runs (guaranteed by Python's import
+    # system), the two stay in agreement.
+    import jobs.ui_actions as ui_actions_module
+
+    assert ui_actions_module.DEFAULT_GENERATED_CV_DIR == jobs_cli.DEFAULT_GENERATED_CV_DIR
 
 
 # --------------------------------------------------------------------------
