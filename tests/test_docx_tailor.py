@@ -352,6 +352,32 @@ def test_atomic_write_bytes_leaves_prior_content_intact_and_cleans_up_tmp_when_r
     assert list(tmp_path.glob("*.tmp")) == []
 
 
+def test_atomic_write_bytes_fsyncs_the_directory_only_after_a_successful_replace(tmp_path, monkeypatch):
+    # jobs.atomic_fs._fsync_directory itself is unit-tested in
+    # test_atomic_fs.py - this only proves _atomic_write_bytes calls it with
+    # the right directory, and only once the rename has actually succeeded.
+    target = tmp_path / "file.docx"
+    mock_fsync_directory = MagicMock()
+    monkeypatch.setattr(docx_tailor_module, "_fsync_directory", mock_fsync_directory)
+
+    _atomic_write_bytes(target, b"fake docx bytes")
+
+    mock_fsync_directory.assert_called_once_with(tmp_path)
+    assert target.read_bytes() == b"fake docx bytes"
+
+
+def test_atomic_write_bytes_does_not_fsync_the_directory_when_replace_fails(tmp_path, monkeypatch):
+    target = tmp_path / "file.docx"
+    mock_fsync_directory = MagicMock()
+    monkeypatch.setattr(docx_tailor_module, "_fsync_directory", mock_fsync_directory)
+    monkeypatch.setattr(docx_tailor_module.os, "replace", MagicMock(side_effect=OSError("simulated disk failure")))
+
+    with pytest.raises(OSError, match="simulated disk failure"):
+        _atomic_write_bytes(target, b"fake docx bytes")
+
+    mock_fsync_directory.assert_not_called()
+
+
 def test_build_tailored_docx_leaves_no_partial_file_when_replace_fails(tmp_path, monkeypatch):
     source = tmp_path / "resume.docx"
     _make_resume_docx(source)

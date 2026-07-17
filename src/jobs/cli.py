@@ -16,6 +16,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
+from jobs.atomic_fs import _fsync_directory
 from jobs.db import (
     connect,
     get_job,
@@ -247,6 +248,11 @@ def _atomic_write_text(path: Path, content: str) -> None:
     locking - out of scope here). Temp file is a same-directory sibling so
     `os.replace` stays a same-filesystem rename; mirrors
     `_bmad/scripts/memlog.py`'s own `write_atomic()` pattern.
+
+    On POSIX, best-effort fsyncs the containing directory after a successful
+    rename too (see `jobs.atomic_fs._fsync_directory`) - this never raises,
+    so an exception from this function still always means the write itself
+    didn't land, exactly as before.
     """
     tmp = path.parent / f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
     try:
@@ -258,6 +264,7 @@ def _atomic_write_text(path: Path, content: str) -> None:
     except (OSError, ValueError):
         tmp.unlink(missing_ok=True)
         raise
+    _fsync_directory(path.parent)
 
 
 def _write_tailoring_files(out_dir: str, job_id: int, tailored_resume: str, cover_letter: str) -> None:

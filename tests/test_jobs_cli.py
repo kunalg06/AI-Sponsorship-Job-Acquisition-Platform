@@ -893,6 +893,32 @@ def test_atomic_write_text_successive_calls_use_distinct_tmp_filenames(tmp_path,
     assert target.read_text(encoding="utf-8") == "second"
 
 
+def test_atomic_write_text_fsyncs_the_directory_only_after_a_successful_replace(tmp_path, monkeypatch):
+    # jobs.atomic_fs._fsync_directory itself is unit-tested in
+    # test_atomic_fs.py - this only proves _atomic_write_text calls it with
+    # the right directory, and only once the rename has actually succeeded.
+    target = tmp_path / "file.txt"
+    mock_fsync_directory = MagicMock()
+    monkeypatch.setattr(jobs_cli, "_fsync_directory", mock_fsync_directory)
+
+    jobs_cli._atomic_write_text(target, "hello world")
+
+    mock_fsync_directory.assert_called_once_with(tmp_path)
+    assert target.read_text(encoding="utf-8") == "hello world"
+
+
+def test_atomic_write_text_does_not_fsync_the_directory_when_replace_fails(tmp_path, monkeypatch):
+    target = tmp_path / "file.txt"
+    mock_fsync_directory = MagicMock()
+    monkeypatch.setattr(jobs_cli, "_fsync_directory", mock_fsync_directory)
+    monkeypatch.setattr(jobs_cli.os, "replace", MagicMock(side_effect=OSError("simulated disk failure")))
+
+    with pytest.raises(OSError, match="simulated disk failure"):
+        jobs_cli._atomic_write_text(target, "hello world")
+
+    mock_fsync_directory.assert_not_called()
+
+
 def test_cmd_outreach_write_failure_after_db_commit_raises_distinct_lost_text_error(outreach_env, monkeypatch, capsys):
     """The DB row commits before the file write is attempted (see
     `_draft_and_store_outreach`), so a write failure here is worse than an

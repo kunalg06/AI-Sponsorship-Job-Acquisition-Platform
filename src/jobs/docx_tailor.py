@@ -38,6 +38,8 @@ from google import genai
 from google.genai import errors as genai_errors
 from pydantic import BaseModel, ValidationError
 
+from jobs.atomic_fs import _fsync_directory
+
 MODEL = "gemini-3.5-flash"
 
 
@@ -47,7 +49,13 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
     failure) but for binary content, since `Document.save()` writes a zip
     container, not text. Implemented locally rather than imported from
     `jobs.cli`, which already imports this module - importing back would be
-    circular."""
+    circular.
+
+    On POSIX, best-effort fsyncs the containing directory after a successful
+    rename too (see `jobs.atomic_fs._fsync_directory`) - this never raises,
+    so an exception from this function still always means the write itself
+    didn't land, exactly as before.
+    """
     tmp = path.parent / f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
     try:
         with open(tmp, "wb") as f:
@@ -58,6 +66,7 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
     except OSError:
         tmp.unlink(missing_ok=True)
         raise
+    _fsync_directory(path.parent)
 
 
 @dataclass(frozen=True)
