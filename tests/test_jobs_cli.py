@@ -21,7 +21,7 @@ import pytest
 import jobs.cli as jobs_cli
 from jobs.cli import _outreach_message_path, _sanitize_filename, _tailored_docx_paths, build_parser
 from jobs.db import connect as connect_jobs
-from jobs.db import get_job, insert_job
+from jobs.db import get_job, insert_job, try_claim_tailoring_lock
 from jobs.extract import JobExtraction
 from jobs.outreach import EMAIL, LINKEDIN_NOTE, OutreachDraft
 from jobs.outreach_db import ensure_schema as ensure_outreach_schema
@@ -248,6 +248,59 @@ def test_tailor_docx_force_flag_regenerates_even_when_hash_matches_and_files_exi
 
     assert env["tailor_calls"].call_count == 2
     assert env["paragraph_calls"].call_count == 2
+
+
+def test_tailor_docx_rejects_a_concurrent_call_while_the_lock_is_held(env):
+    # Simulates another session (e.g. a second browser tab) already mid-run
+    # for the same job - the DB-backed lock is the only thing that can catch
+    # this, since each `_run()` here opens and closes its own connection.
+    conn = connect_jobs(env["jobs_db"])
+    try:
+        assert try_claim_tailoring_lock(conn, env["job_id"]) is not None
+    finally:
+        conn.close()
+
+    with pytest.raises(SystemExit, match="already in progress"):
+        _run(_tailor_docx_argv(env))
+
+    assert env["tailor_calls"].call_count == 0
+    assert env["paragraph_calls"].call_count == 0
+
+
+def test_tailor_docx_releases_the_lock_even_when_generation_raises_so_a_retry_can_claim_it(env):
+    env["paragraph_calls"].side_effect = RuntimeError("simulated LLM failure")
+
+    with pytest.raises(RuntimeError):
+        _run(_tailor_docx_argv(env))
+
+    row = _get_job_row(env["jobs_db"], env["job_id"])
+    assert row["tailoring_lock_started_at"] is None
+
+    env["paragraph_calls"].side_effect = None  # simulate the retry succeeding
+    _run(_tailor_docx_argv(env))
+
+    assert env["tailor_calls"].call_count == 2
+
+
+def test_tailor_docx_releases_the_lock_when_the_earlier_llm_call_raises(env):
+    # A distinct failure site from the test above - `generate_tailored_application`
+    # raises before `generate_paragraph_edits` is ever reached, exercising the
+    # same `finally` release from a different point in the try block, so a
+    # regression that only breaks release on this path (e.g. an accidental
+    # early `return` added between the two LLM calls) would still be caught.
+    env["tailor_calls"].side_effect = RuntimeError("simulated LLM failure")
+
+    with pytest.raises(RuntimeError):
+        _run(_tailor_docx_argv(env))
+
+    row = _get_job_row(env["jobs_db"], env["job_id"])
+    assert row["tailoring_lock_started_at"] is None
+    assert env["paragraph_calls"].call_count == 0
+
+    env["tailor_calls"].side_effect = None
+    _run(_tailor_docx_argv(env))
+
+    assert env["tailor_calls"].call_count == 2
 
 
 def test_tailor_docx_unknown_job_id_raises_system_exit(env):

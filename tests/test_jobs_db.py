@@ -1,4 +1,10 @@
+import sqlite3
+import threading
+import time
+from datetime import datetime, timedelta, timezone
+
 from jobs.db import (
+    BUSY_TIMEOUT_MS,
     connect,
     get_job,
     insert_job,
@@ -9,6 +15,8 @@ from jobs.db import (
     mark_applied,
     mark_discarded,
     mark_reminders_sent_through,
+    release_tailoring_lock,
+    try_claim_tailoring_lock,
     update_employer_name,
     update_match_verdict,
     update_salary_verdict,
@@ -250,6 +258,156 @@ def test_update_tailoring_persists_a_none_page_risk_warning(tmp_path):
         assert row["tailor_page_risk_warning"] is None
     finally:
         conn.close()
+
+
+def test_try_claim_tailoring_lock_succeeds_when_unset(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        extraction = JobExtraction(job_title="AI Engineer", is_agency_posting=False)
+        job_id = insert_job(conn, "raw text", extraction)
+
+        token = try_claim_tailoring_lock(conn, job_id)
+
+        assert isinstance(token, str) and token
+        row = get_job(conn, job_id)
+        assert row["tailoring_lock_started_at"] is not None
+        assert row["tailoring_lock_token"] == token
+    finally:
+        conn.close()
+
+
+def test_try_claim_tailoring_lock_fails_when_already_held(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        extraction = JobExtraction(job_title="AI Engineer", is_agency_posting=False)
+        job_id = insert_job(conn, "raw text", extraction)
+
+        assert try_claim_tailoring_lock(conn, job_id) is not None
+        assert try_claim_tailoring_lock(conn, job_id) is None  # still held, not stale
+    finally:
+        conn.close()
+
+
+def test_try_claim_tailoring_lock_succeeds_when_the_existing_lock_is_stale(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        extraction = JobExtraction(job_title="AI Engineer", is_agency_posting=False)
+        job_id = insert_job(conn, "raw text", extraction)
+
+        stale_timestamp = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
+        conn.execute(
+            "UPDATE jobs SET tailoring_lock_started_at = ?, tailoring_lock_token = ? WHERE id = ?",
+            (stale_timestamp, "some-other-holder-token", job_id),
+        )
+        conn.commit()
+
+        new_token = try_claim_tailoring_lock(conn, job_id, stale_after_seconds=300)
+
+        assert new_token is not None
+        assert new_token != "some-other-holder-token"
+    finally:
+        conn.close()
+
+
+def test_release_tailoring_lock_clears_it_and_allows_a_new_claim(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        extraction = JobExtraction(job_title="AI Engineer", is_agency_posting=False)
+        job_id = insert_job(conn, "raw text", extraction)
+
+        token = try_claim_tailoring_lock(conn, job_id)
+        release_tailoring_lock(conn, job_id, token)
+
+        row = get_job(conn, job_id)
+        assert row["tailoring_lock_started_at"] is None
+        assert row["tailoring_lock_token"] is None
+        assert try_claim_tailoring_lock(conn, job_id) is not None
+    finally:
+        conn.close()
+
+
+def test_release_tailoring_lock_is_a_no_op_if_the_lock_was_reclaimed_by_someone_else(tmp_path):
+    # The scenario the ownership token exists for: holder A's lock goes
+    # stale, holder B legitimately reclaims it, and only then does A's
+    # delayed release call arrive - it must not clobber B's still-live lock,
+    # or a third caller C could claim the lock while B is mid-flight.
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        extraction = JobExtraction(job_title="AI Engineer", is_agency_posting=False)
+        job_id = insert_job(conn, "raw text", extraction)
+
+        token_a = try_claim_tailoring_lock(conn, job_id)
+        stale_timestamp = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
+        conn.execute(
+            "UPDATE jobs SET tailoring_lock_started_at = ? WHERE id = ?", (stale_timestamp, job_id)
+        )
+        conn.commit()
+        token_b = try_claim_tailoring_lock(conn, job_id, stale_after_seconds=300)
+        assert token_b is not None and token_b != token_a
+
+        release_tailoring_lock(conn, job_id, token_a)  # A's delayed release, using its now-stale token
+
+        row = get_job(conn, job_id)
+        assert row["tailoring_lock_token"] == token_b  # B's lock survives untouched
+        assert row["tailoring_lock_started_at"] is not None
+        assert try_claim_tailoring_lock(conn, job_id) is None  # still held by B
+    finally:
+        conn.close()
+
+
+def test_connect_sets_busy_timeout_pragma(tmp_path):
+    db_path = tmp_path / "jobs.db"
+    conn = connect(db_path)
+    try:
+        # PRAGMA busy_timeout with no argument returns the current value (ms).
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == BUSY_TIMEOUT_MS
+    finally:
+        conn.close()
+
+
+def test_try_claim_tailoring_lock_waits_out_a_real_held_write_lock_instead_of_raising(tmp_path):
+    # Exercises real cross-connection lock contention (the sequential-claim
+    # tests above never have two connections open at once) - proves the new
+    # busy_timeout PRAGMA actually lets a concurrent claim wait for the lock
+    # rather than immediately raising "database is locked".
+    db_path = tmp_path / "jobs.db"
+    conn1 = connect(db_path)
+    extraction = JobExtraction(job_title="AI Engineer", is_agency_posting=False)
+    job_id = insert_job(conn1, "raw text", extraction)
+
+    conn1.execute("BEGIN IMMEDIATE")
+    conn1.execute("UPDATE jobs SET job_title = ? WHERE id = ?", ("Holding the write lock", job_id))
+
+    result: dict = {}
+
+    def waiting_claimer():
+        # Its own connection, opened and used entirely on this thread -
+        # sqlite3 connections aren't safe to share across threads.
+        conn2 = connect(db_path)
+        start = time.perf_counter()
+        try:
+            result["token"] = try_claim_tailoring_lock(conn2, job_id)
+            result["elapsed"] = time.perf_counter() - start
+            result["error"] = None
+        except sqlite3.OperationalError as exc:
+            result["error"] = exc
+        finally:
+            conn2.close()
+
+    waiter = threading.Thread(target=waiting_claimer)
+    waiter.start()
+
+    hold_seconds = 0.5
+    time.sleep(hold_seconds)
+    conn1.commit()
+    conn1.close()
+    waiter.join(timeout=BUSY_TIMEOUT_MS / 1000)
+
+    assert result.get("error") is None
+    assert result.get("token") is not None
+    # Proves the claimer actually waited for the lock rather than getting
+    # lucky - it couldn't have succeeded before conn1 released it.
+    assert result["elapsed"] >= hold_seconds
 
 
 def test_list_legacy_tailored_rows_returns_rows_with_db_resident_tailored_text(tmp_path):

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
 from jobs.extract import JobExtraction
+
+BUSY_TIMEOUT_MS = 5000
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -50,6 +53,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     tailor_portfolio_gaps TEXT,
     tailor_page_risk_warning TEXT,
     tailored_at TEXT,
+    tailoring_lock_started_at TEXT,
+    tailoring_lock_token TEXT,
     applied_status TEXT,
     applied_at TEXT,
     reminder_3_sent_at TEXT,
@@ -82,6 +87,7 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
+    conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
     conn.executescript(SCHEMA)
     _ensure_columns(conn, "jobs", SCHEMA)
     return conn
@@ -275,6 +281,71 @@ def update_tailoring(
                 datetime.now(timezone.utc).isoformat(),
                 job_id,
             ),
+        )
+
+
+def try_claim_tailoring_lock(
+    conn: sqlite3.Connection, job_id: int, *, stale_after_seconds: int = 300
+) -> Optional[str]:
+    """Atomically claim `job_id`'s advisory tailoring lock, so two concurrent
+    callers of `jobs.cli._tailor_docx_for_job` (e.g. two browser tabs, or a
+    CLI run overlapping a UI click) can't both reach the LLM/file-write step
+    for the same job and race each other's output. The claim is a single
+    conditional `UPDATE` (not a read-then-write check), since a separate
+    check-and-set would reopen the same race this exists to close.
+
+    Returns a caller-private ownership token on success, to be passed to
+    `release_tailoring_lock` - or `None` if someone else already holds a
+    live lock (claimed less than `stale_after_seconds` ago). A lock older
+    than that is still claimable even though nothing explicitly released it,
+    protecting against a crashed/killed process leaving the lock set
+    forever - but that reclaim is exactly why the token exists: without it,
+    a slow original holder finally finishing (and releasing) *after* its own
+    lock went stale and was reclaimed by someone else would clobber the new
+    holder's live lock. `release_tailoring_lock` only clears the lock when
+    the token still matches, so a delayed release from a since-superseded
+    holder is a safe no-op instead.
+
+    Assumes `job_id` refers to an existing row - like a claim against a
+    stale lock, an `UPDATE` against a nonexistent `job_id` also matches zero
+    rows and returns `None` indistinguishably from "lock held by someone
+    else"; callers must already have validated the job exists (as both
+    `jobs.cli._cmd_tailor_docx` and `ui_actions.generate_tailored_docx_for_job`
+    do via `get_job` before reaching this call).
+
+    Staleness is a plain string comparison, correct only because every
+    writer of this column goes through `datetime.now(timezone.utc)
+    .isoformat()` (fixed-width, UTC) - a differently-formatted timestamp
+    written by some future direct SQL would silently break it."""
+    token = uuid.uuid4().hex
+    now = datetime.now(timezone.utc)
+    stale_cutoff = (now - timedelta(seconds=stale_after_seconds)).isoformat()
+    with conn:
+        cursor = conn.execute(
+            """
+            UPDATE jobs
+            SET tailoring_lock_started_at = ?, tailoring_lock_token = ?
+            WHERE id = ? AND (tailoring_lock_started_at IS NULL OR tailoring_lock_started_at < ?)
+            """,
+            (now.isoformat(), token, job_id, stale_cutoff),
+        )
+    return token if cursor.rowcount > 0 else None
+
+
+def release_tailoring_lock(conn: sqlite3.Connection, job_id: int, token: str) -> None:
+    """Clears `job_id`'s advisory tailoring lock, but only if `token` still
+    matches what's currently stored there - see `try_claim_tailoring_lock`
+    for why an unconditional clear would be unsafe. Callers of
+    `try_claim_tailoring_lock` must call this in a `finally` block (with the
+    token it returned) so the lock always clears on the owning caller's own
+    exit, success or failure - otherwise a single failed generation would
+    permanently block that job's future retries until the staleness window
+    passes."""
+    with conn:
+        conn.execute(
+            "UPDATE jobs SET tailoring_lock_started_at = NULL, tailoring_lock_token = NULL "
+            "WHERE id = ? AND tailoring_lock_token = ?",
+            (job_id, token),
         )
 
 

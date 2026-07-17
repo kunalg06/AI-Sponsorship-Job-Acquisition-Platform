@@ -28,6 +28,8 @@ from jobs.db import (
     mark_applied,
     mark_discarded,
     mark_reminders_sent_through,
+    release_tailoring_lock,
+    try_claim_tailoring_lock,
     update_employer_name,
     update_match_verdict,
     update_salary_verdict,
@@ -477,45 +479,66 @@ def _tailor_docx_for_job(
     all (not even the source .docx). `estimate_page_risk` is computed ONLY
     on a fresh generation, right where `rewritten` is already in hand, and
     persisted via `update_tailoring` for exact recall on the next hit -
-    never recomputed by diffing docx files (see Spec Change Log)."""
+    never recomputed by diffing docx files (see Spec Change Log).
+
+    Holds `job["id"]`'s advisory tailoring lock for the whole call, cache-check
+    included - two concurrent callers (e.g. two browser tabs) could otherwise
+    both observe a cache miss before either writes, race the LLM call, and
+    silently overwrite each other's docx output. Raises `SystemExit` if
+    another call already holds the lock, rather than proceeding to race it.
+    Relies on both real callers (`_cmd_tailor_docx`, `ui_actions.
+    generate_tailored_docx_for_job`) opening a fresh DB connection per call
+    rather than caching one across a Streamlit session - that's what makes
+    the lock visible across browser tabs/CLI runs sharing the same jobs.db;
+    caching the connection would silently break this."""
     resume_path, cover_letter_path = _tailored_docx_paths(job["company_name"], job["id"], out_dir)
     tailor_hash = compute_tailor_hash(raw_resume_text, job["raw_text"])
-    text_result = _get_or_generate_tailor_text(
-        conn, job, raw_resume_text, tailor_hash, resume_path, cover_letter_path, force
-    )
 
-    if not text_result.freshly_generated:
+    lock_token = try_claim_tailoring_lock(conn, job["id"])
+    if lock_token is None:
+        raise SystemExit(
+            f"Job #{job['id']}: tailoring is already in progress (started by another session) - "
+            f"try again in a moment."
+        )
+    try:
+        text_result = _get_or_generate_tailor_text(
+            conn, job, raw_resume_text, tailor_hash, resume_path, cover_letter_path, force
+        )
+
+        if not text_result.freshly_generated:
+            return TailorDocxResult(
+                resume_path=resume_path,
+                cover_letter_path=cover_letter_path,
+                page_risk_warning=text_result.page_risk_warning,
+                freshly_generated=False,
+            )
+
+        source_docx = _find_source_resume_docx(resume_dir)
+        paragraphs = extract_paragraphs(source_docx)
+        rewritten = generate_paragraph_edits(paragraphs, job["raw_text"], job["company_name"])
+
+        build_tailored_docx(source_docx, rewritten, resume_path)
+        write_plain_docx(text_result.cover_letter, cover_letter_path)
+
+        page_risk_warning = estimate_page_risk(source_docx, rewritten)
+
+        update_tailoring(
+            conn,
+            job["id"],
+            tailor_hash=tailor_hash,
+            evidence_notes=text_result.evidence_notes,
+            portfolio_gaps=text_result.portfolio_gaps,
+            page_risk_warning=page_risk_warning,
+        )
+
         return TailorDocxResult(
             resume_path=resume_path,
             cover_letter_path=cover_letter_path,
-            page_risk_warning=text_result.page_risk_warning,
-            freshly_generated=False,
+            page_risk_warning=page_risk_warning,
+            freshly_generated=True,
         )
-
-    source_docx = _find_source_resume_docx(resume_dir)
-    paragraphs = extract_paragraphs(source_docx)
-    rewritten = generate_paragraph_edits(paragraphs, job["raw_text"], job["company_name"])
-
-    build_tailored_docx(source_docx, rewritten, resume_path)
-    write_plain_docx(text_result.cover_letter, cover_letter_path)
-
-    page_risk_warning = estimate_page_risk(source_docx, rewritten)
-
-    update_tailoring(
-        conn,
-        job["id"],
-        tailor_hash=tailor_hash,
-        evidence_notes=text_result.evidence_notes,
-        portfolio_gaps=text_result.portfolio_gaps,
-        page_risk_warning=page_risk_warning,
-    )
-
-    return TailorDocxResult(
-        resume_path=resume_path,
-        cover_letter_path=cover_letter_path,
-        page_risk_warning=page_risk_warning,
-        freshly_generated=True,
-    )
+    finally:
+        release_tailoring_lock(conn, job["id"], lock_token)
 
 
 def _cmd_tailor_docx(args: argparse.Namespace) -> None:
