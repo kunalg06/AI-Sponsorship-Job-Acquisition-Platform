@@ -30,20 +30,60 @@ from jobs.outreach_db import ensure_schema as ensure_outreach_schema
 from jobs.outreach_db import insert_outreach_message
 
 
+def _str_or_empty(exc: BaseException) -> str:
+    try:
+        return str(exc).strip()
+    except Exception:
+        return ""
+
+
+def _next_chain_link(exc: BaseException) -> Optional[BaseException]:
+    """Mirrors Python's own traceback formatter's chain-walk rule: an
+    explicit `__cause__` (`raise ... from cause`) always wins, and
+    `__context__` (the implicit `except: raise ...` chain) is only
+    consulted when the chain wasn't explicitly cut with `raise ... from
+    None` (`__suppress_context__`) - respecting that is the whole point
+    of `from None`, which developers use specifically to hide an internal
+    exception behind a clean one."""
+    if exc.__cause__ is not None:
+        return exc.__cause__
+    if exc.__suppress_context__:
+        return None
+    return exc.__context__
+
+
 def error_display_text(exc: BaseException) -> str:
     """Text for a view to pass to `st.error()`. `str(exc)` is usually
     informative, but some exception types (e.g. bare `OSError`) can have an
     empty or whitespace-only `str()`, which renders a blank-looking error box
-    with no clue what went wrong - fall back to naming the exception's type
-    in that case. Takes `BaseException`, not `Exception`, since most callers
-    pass a caught `SystemExit` (this codebase's own convention for
-    CLI-layer failures reaching the UI), which is not an `Exception`
-    subclass."""
-    try:
-        text = str(exc).strip()
-    except Exception:
-        text = ""
-    return text or f"{type(exc).__name__}: (no error message)"
+    with no clue what went wrong. Takes `BaseException`, not `Exception`,
+    since most callers pass a caught `SystemExit` (this codebase's own
+    convention for CLI-layer failures reaching the UI), which is not an
+    `Exception` subclass.
+
+    When `str(exc)` is empty, walks the exception chain (see
+    `_next_chain_link`) for the first link with a non-empty message, since
+    that's usually the real reason and is strictly more useful than a bare
+    type name. Only falls back to naming a type when nothing in the chain
+    has a message - then it names the innermost (most specific) exception,
+    not necessarily `exc` itself. Tracks visited exception ids so a
+    manually-constructed reference cycle in the chain can't loop forever."""
+    text = _str_or_empty(exc)
+    if text:
+        return text
+
+    seen = {id(exc)}
+    innermost = exc
+    link = _next_chain_link(exc)
+    while link is not None and id(link) not in seen:
+        seen.add(id(link))
+        innermost = link
+        chained_text = _str_or_empty(link)
+        if chained_text:
+            return chained_text
+        link = _next_chain_link(link)
+
+    return f"{type(innermost).__name__}: (no error message)"
 
 
 def generate_tailored_docx_for_job(

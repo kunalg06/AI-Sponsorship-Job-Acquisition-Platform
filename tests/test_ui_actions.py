@@ -202,6 +202,154 @@ def test_error_display_text_survives_a_str_that_itself_raises():
     assert "BrokenStr" in text
 
 
+def test_error_display_text_surfaces_explicit_cause_message_when_str_exc_is_empty():
+    try:
+        try:
+            raise ValueError("disk full")
+        except ValueError as cause:
+            raise OSError() from cause
+    except OSError as exc:
+        assert str(exc) == ""
+        assert error_display_text(exc) == "disk full"
+
+
+def test_error_display_text_surfaces_implicit_context_message_when_str_exc_is_empty():
+    # No `from` clause - Python still chains via __context__ automatically.
+    try:
+        try:
+            raise ValueError("disk full")
+        except ValueError:
+            raise OSError()
+    except OSError as exc:
+        assert str(exc) == ""
+        assert error_display_text(exc) == "disk full"
+
+
+def test_error_display_text_walks_multiple_chain_links_to_find_a_message():
+    try:
+        try:
+            try:
+                raise ValueError("disk full")
+            except ValueError as root_cause:
+                raise OSError() from root_cause  # empty str(), one link deep
+        except OSError as mid_cause:
+            raise RuntimeError() from mid_cause  # empty str(), two links deep
+    except RuntimeError as exc:
+        assert str(exc) == ""
+        assert error_display_text(exc) == "disk full"
+
+
+def test_error_display_text_falls_back_to_innermost_type_name_when_whole_chain_is_empty():
+    try:
+        try:
+            raise ValueError()
+        except ValueError as cause:
+            raise OSError() from cause
+    except OSError as exc:
+        assert str(exc) == ""
+        assert str(exc.__cause__) == ""
+
+        text = error_display_text(exc)
+
+        assert "ValueError" in text
+        assert "OSError" not in text
+
+
+def test_error_display_text_does_not_loop_forever_on_a_cyclical_chain():
+    exc = OSError()
+    exc.__cause__ = exc  # a chain can be constructed to reference itself
+
+    text = error_display_text(exc)
+
+    assert text != ""
+    assert "OSError" in text
+
+
+def test_error_display_text_does_not_loop_forever_on_a_two_node_cycle():
+    a = OSError()
+    b = RuntimeError()
+    a.__cause__ = b
+    b.__cause__ = a  # A -> B -> A, no node reachable from itself directly
+
+    text = error_display_text(a)
+
+    assert text != ""  # must terminate and return something, not hang
+
+
+def test_error_display_text_finds_a_message_before_a_cycle_closes():
+    a = OSError()
+    b = ValueError("disk full")
+    c = RuntimeError()
+    a.__cause__ = b
+    b.__cause__ = c
+    c.__cause__ = a  # cycle closes back to a, but b's message comes first
+
+    assert error_display_text(a) == "disk full"
+
+
+def test_error_display_text_respects_raise_from_none_and_does_not_leak_suppressed_context():
+    try:
+        try:
+            raise ValueError("internal db driver detail")
+        except ValueError:
+            raise OSError() from None  # explicitly suppresses __context__
+    except OSError as exc:
+        assert str(exc) == ""
+        assert exc.__suppress_context__ is True
+
+        text = error_display_text(exc)
+
+        assert "internal db driver detail" not in text
+        assert "OSError" in text
+
+
+def test_error_display_text_prefers_explicit_cause_over_a_different_context():
+    # raise ... from cause sets __cause__ explicitly to a given object;
+    # __context__ is set independently to whatever exception was actually
+    # active at the raise site - here they're deliberately different objects.
+    explicit_cause = ValueError("disk full")
+    try:
+        try:
+            raise KeyError("active context, not the cause")
+        except KeyError:
+            raise OSError() from explicit_cause
+    except OSError as exc:
+        assert exc.__cause__ is explicit_cause
+        assert exc.__cause__ is not exc.__context__
+        assert error_display_text(exc) == "disk full"
+
+
+def test_error_display_text_skips_a_whitespace_only_link_partway_down_the_chain():
+    try:
+        try:
+            try:
+                raise ValueError("disk full")
+            except ValueError as root_cause:
+                raise OSError("   ") from root_cause  # whitespace-only, must be skipped
+        except OSError as mid_cause:
+            raise RuntimeError() from mid_cause
+    except RuntimeError as exc:
+        assert str(exc) == ""
+        assert error_display_text(exc) == "disk full"
+
+
+def test_error_display_text_survives_a_chained_causes_str_that_itself_raises():
+    class BrokenStr(Exception):
+        def __str__(self):
+            raise RuntimeError("__str__ is broken")
+
+    try:
+        try:
+            raise BrokenStr()
+        except BrokenStr as cause:
+            raise OSError() from cause
+    except OSError as exc:
+        text = error_display_text(exc)
+
+        assert text != ""
+        assert "BrokenStr" in text
+
+
 def _make_source_resume_docx(path: Path) -> None:
     document = docx.Document()
     document.add_paragraph("JANE DOE")
