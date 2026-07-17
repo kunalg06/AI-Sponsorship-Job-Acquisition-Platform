@@ -480,6 +480,8 @@ if extraction:
                             )
                             if message_text is not None:
                                 st.text(message_text)
+                            elif msg["write_failed_at"]:
+                                st.caption("(drafted text failed to save to disk at the time - not recoverable)")
                             else:
                                 st.caption("(message file not found)")
                             st.divider()

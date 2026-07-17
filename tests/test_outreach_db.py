@@ -12,6 +12,7 @@ from jobs.outreach_db import (
     list_contacts,
     list_legacy_outreach_message_rows,
     list_outreach_messages,
+    mark_outreach_write_failed,
 )
 
 
@@ -80,6 +81,60 @@ def test_inserted_outreach_message_row_has_no_message_column(tmp_path):
 
         messages = list_outreach_messages(conn, job_id)
         assert "message" not in messages[0].keys()
+    finally:
+        conn.close()
+
+
+def test_inserted_outreach_message_row_has_no_write_failure_by_default(tmp_path):
+    conn = _job_db(tmp_path)
+    try:
+        job_id = insert_job(conn, "raw text", JobExtraction(job_title="AI Engineer", is_agency_posting=False))
+        insert_outreach_message(
+            conn, job_id, contact_id=None, contact_name="Sarah Cole", channel="linkedin_note", message="Hi Sarah!"
+        )
+
+        assert list_outreach_messages(conn, job_id)[0]["write_failed_at"] is None
+    finally:
+        conn.close()
+
+
+def test_mark_outreach_write_failed_sets_the_marker(tmp_path):
+    conn = _job_db(tmp_path)
+    try:
+        job_id = insert_job(conn, "raw text", JobExtraction(job_title="AI Engineer", is_agency_posting=False))
+        message_id = insert_outreach_message(
+            conn, job_id, contact_id=None, contact_name="Sarah Cole", channel="linkedin_note", message="Hi Sarah!"
+        )
+
+        mark_outreach_write_failed(conn, message_id)
+
+        row = list_outreach_messages(conn, job_id)[0]
+        assert row["write_failed_at"] is not None
+    finally:
+        conn.close()
+
+
+def test_ensure_schema_adds_write_failed_at_column_to_a_pre_existing_db(tmp_path):
+    # Simulate a jobs.db created before this fix: outreach_messages exists
+    # without the column, since CREATE TABLE IF NOT EXISTS never adds it to
+    # an already-existing table.
+    db_path = tmp_path / "jobs.db"
+    conn = connect(db_path)
+    ensure_schema(conn)
+    conn.execute("ALTER TABLE outreach_messages DROP COLUMN write_failed_at")
+    existing_before = {row["name"] for row in conn.execute("PRAGMA table_info(outreach_messages)")}
+    assert "write_failed_at" not in existing_before
+    conn.close()
+
+    conn = connect(db_path)
+    ensure_schema(conn)  # must migrate the pre-existing table, not just skip it
+    try:
+        existing_after = {row["name"] for row in conn.execute("PRAGMA table_info(outreach_messages)")}
+        assert "write_failed_at" in existing_after
+
+        ensure_schema(conn)  # a third call, now that the column already exists, must be a safe no-op
+        existing_after_third_call = {row["name"] for row in conn.execute("PRAGMA table_info(outreach_messages)")}
+        assert "write_failed_at" in existing_after_third_call
     finally:
         conn.close()
 

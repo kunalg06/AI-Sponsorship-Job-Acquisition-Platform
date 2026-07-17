@@ -158,6 +158,7 @@ def test_draft_and_save_outreach_write_failure_after_db_commit_raises_error_cont
     finally:
         conn.close()
     assert len(messages) == 1
+    assert messages[0]["write_failed_at"] is not None  # marks it as distinguishable from a later-deleted file
 
 
 def test_error_display_text_returns_str_exc_unchanged_when_non_empty():

@@ -30,13 +30,28 @@ CREATE TABLE IF NOT EXISTS outreach_messages (
     contact_name TEXT NOT NULL,
     channel TEXT NOT NULL,
     char_count INTEGER NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    write_failed_at TEXT
 );
 """
 
 
+def _ensure_outreach_messages_columns(conn: sqlite3.Connection) -> None:
+    """Add any `outreach_messages` column added to `SCHEMA` after a DB was
+    first created - `CREATE TABLE IF NOT EXISTS` is a no-op on a table that
+    already exists, so a pre-existing DB would otherwise never get it.
+    Mirrors `drop_legacy_message_column`'s own `PRAGMA table_info` + direct
+    `ALTER TABLE` style rather than reusing `jobs.db._ensure_columns`: that
+    function's paren-parsing assumes one `CREATE TABLE` per schema string,
+    and `SCHEMA` here has two (`contacts` + `outreach_messages`)."""
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(outreach_messages)")}
+    if "write_failed_at" not in existing:
+        conn.execute("ALTER TABLE outreach_messages ADD COLUMN write_failed_at TEXT")
+
+
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    _ensure_outreach_messages_columns(conn)
 
 
 def insert_contact(
@@ -93,6 +108,28 @@ def insert_outreach_message(
             (job_id, contact_id, contact_name, channel, len(message), datetime.now(timezone.utc).isoformat()),
         )
     return cursor.lastrowid
+
+
+def mark_outreach_write_failed(conn: sqlite3.Connection, message_id: int) -> None:
+    """Marks a row as a known write-failure - its metadata was committed by
+    `insert_outreach_message`, but the drafted text's file write then failed
+    (see `jobs.cli._draft_and_store_outreach`/`jobs.ui_actions.
+    draft_and_save_outreach`), leaving it permanently orphaned - nothing
+    retries a failed write for the same row, so this doesn't recover the
+    lost text, only lets a caller distinguish this row later from one whose
+    file is simply missing for some other reason (deleted externally,
+    moved) instead of showing the same generic message for both.
+
+    Callers marking a failure from inside their own except block should
+    wrap this call in its own try/except: it runs after the file write has
+    already failed, so a second failure here (e.g. the same full/read-only
+    disk also backs this DB) must not replace the caller's own, more
+    informative error - see the call sites for the pattern."""
+    with conn:
+        conn.execute(
+            "UPDATE outreach_messages SET write_failed_at = ? WHERE id = ?",
+            (datetime.now(timezone.utc).isoformat(), message_id),
+        )
 
 
 def list_outreach_messages(conn: sqlite3.Connection, job_id: int) -> list[sqlite3.Row]:

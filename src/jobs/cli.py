@@ -56,6 +56,7 @@ from jobs.outreach_db import (
     insert_outreach_message,
     list_contacts,
     list_legacy_outreach_message_rows,
+    mark_outreach_write_failed,
 )
 from jobs.salary_check import MEETS_THRESHOLD, check_salary_threshold
 from jobs.sponsor_check import CONFIRMED, FUZZY_MATCH, USER_CONFIRMED, check_sponsor_status
@@ -861,6 +862,13 @@ def _draft_and_store_outreach(
         # LLM-backed redraft from scratch.
         print(f"  --- Drafted message text (recover this before it's gone) ---")
         print(f"  {draft.message}")
+        try:
+            mark_outreach_write_failed(conn, message_id)
+        except Exception as mark_exc:
+            # Best-effort: this runs after the file write already failed, so
+            # a second failure here (e.g. the same disk backs this DB too)
+            # must not replace the more informative SystemExit below.
+            print(f"  (also failed to mark message #{message_id} as a known write-failure: {mark_exc})")
         raise SystemExit(
             f"Job #{job['id']}: outreach message #{message_id} ({channel}, {len(draft.message)} chars) "
             f"was logged to the database, but writing its text to {path} failed: {exc}. "

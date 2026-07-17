@@ -997,6 +997,13 @@ def test_cmd_outreach_write_failure_after_db_commit_raises_distinct_lost_text_er
             ]
         )
 
+    conn = connect_jobs(outreach_env["jobs_db"])
+    try:
+        row = list_outreach_messages(conn, outreach_env["job_id"])[0]
+        assert row["write_failed_at"] is not None  # marks it as distinguishable from a later-deleted file
+    finally:
+        conn.close()
+
     assert "Hi Sarah, I'd love to chat about the AI Engineer role." in capsys.readouterr().out
 
     # The DB row is still there (insert-only convention, no rollback) -
@@ -1008,3 +1015,28 @@ def test_cmd_outreach_write_failure_after_db_commit_raises_distinct_lost_text_er
     finally:
         conn.close()
     assert len(messages) == 1
+
+
+def test_cmd_outreach_write_failure_survives_the_write_failure_marker_itself_failing(outreach_env, monkeypatch):
+    # mark_outreach_write_failed runs after the file write already failed -
+    # if it also raises (e.g. the same disk backs this DB), the original,
+    # more informative SystemExit (with the recovery text) must still be
+    # what the operator sees, not a raw sqlite error replacing it.
+    monkeypatch.setattr(jobs_cli, "_atomic_write_text", MagicMock(side_effect=OSError("disk full")))
+    monkeypatch.setattr(jobs_cli, "mark_outreach_write_failed", MagicMock(side_effect=sqlite3.OperationalError("disk full")))
+
+    with pytest.raises(SystemExit, match="was logged to the database.*text itself was not saved"):
+        _run(
+            [
+                "outreach",
+                str(outreach_env["job_id"]),
+                "--channel",
+                LINKEDIN_NOTE,
+                "--db",
+                str(outreach_env["jobs_db"]),
+                "--profile-db",
+                str(outreach_env["profile_db"]),
+                "--out-dir",
+                str(outreach_env["out_dir"]),
+            ]
+        )

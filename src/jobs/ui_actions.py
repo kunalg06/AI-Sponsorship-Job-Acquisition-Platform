@@ -11,6 +11,7 @@ action for any stored job.
 from __future__ import annotations
 
 import sqlite3
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -27,7 +28,7 @@ from jobs.db import connect as connect_jobs
 from jobs.db import get_job
 from jobs.outreach import OutreachDraft, draft_outreach_message
 from jobs.outreach_db import ensure_schema as ensure_outreach_schema
-from jobs.outreach_db import insert_outreach_message
+from jobs.outreach_db import insert_outreach_message, mark_outreach_write_failed
 
 
 def _str_or_empty(exc: BaseException) -> str:
@@ -168,6 +169,16 @@ def draft_and_save_outreach(
             # exception message itself, not print()'d - a Streamlit user only
             # ever sees this via `st.error(error_display_text(exc))`, never
             # server stdout.
+            try:
+                mark_outreach_write_failed(jobs_conn, message_id)
+            except Exception as mark_exc:
+                # Best-effort: this runs after the file write already failed,
+                # so a second failure here must not replace the more
+                # informative SystemExit below.
+                print(
+                    f"Warning: also failed to mark message #{message_id} as a known write-failure: {mark_exc}",
+                    file=sys.stderr,
+                )
             raise SystemExit(
                 f"Job #{job_id}: outreach message #{message_id} ({channel}, {len(draft.message)} chars) "
                 f"was logged to the database, but writing its text to {path} failed: {exc}. "
