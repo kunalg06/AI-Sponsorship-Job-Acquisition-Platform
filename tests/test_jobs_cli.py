@@ -431,6 +431,135 @@ def test_cmd_tailor_calls_llm_both_times_and_overwrites_txt_output(env, tmp_path
     assert row["tailor_hash"] is None
 
 
+def _fail_atomic_write_on_cover_letter(monkeypatch, exc=None):
+    real_atomic_write_text = jobs_cli._atomic_write_text
+    exc = exc if exc is not None else OSError("simulated disk failure")
+
+    def fail_on_cover_letter(path, content):
+        if path.name.endswith("_cover_letter.txt"):
+            raise exc
+        real_atomic_write_text(path, content)
+
+    monkeypatch.setattr(jobs_cli, "_atomic_write_text", fail_on_cover_letter)
+
+
+def test_write_tailoring_files_on_a_first_run_leaves_the_fresh_resume_and_no_cover_letter(tmp_path, monkeypatch, capsys):
+    # Cover-letter write fails with nothing pre-existing (a first tailor for
+    # this job_id) - the resume write already succeeded and is deliberately
+    # left in place (not deleted - see the function's own comment on why an
+    # earlier "just delete it" design was rejected), and the generated text
+    # is printed for manual recovery since a re-run means a fresh, different
+    # LLM call.
+    _fail_atomic_write_on_cover_letter(monkeypatch)
+
+    with pytest.raises(SystemExit, match="was never written"):
+        jobs_cli._write_tailoring_files(str(tmp_path), 1, "TAILORED RESUME", "COVER LETTER")
+
+    assert (tmp_path / "1_resume.txt").read_text(encoding="utf-8") == "TAILORED RESUME"
+    assert not (tmp_path / "1_cover_letter.txt").exists()
+
+    out = capsys.readouterr().out
+    assert "TAILORED RESUME" in out
+    assert "COVER LETTER" in out
+
+
+def test_write_tailoring_files_on_a_rerun_leaves_the_fresh_resume_and_the_stale_cover_letter(tmp_path, monkeypatch):
+    # Same failure, but this job_id was already tailored before - both files
+    # pre-exist. Deleting the just-written resume here (an earlier, rejected
+    # design) would leave NO resume and a stale cover letter - strictly
+    # worse than leaving the fresh resume next to the (unavoidably) stale
+    # cover letter, since nothing can restore the cover letter's own prior
+    # content without a backup/manifest system this fix deliberately
+    # doesn't build (see spec Non-goals).
+    (tmp_path / "1_resume.txt").write_text("OLD RESUME", encoding="utf-8")
+    stale_cover_letter = tmp_path / "1_cover_letter.txt"
+    stale_cover_letter.write_text("OLD COVER LETTER", encoding="utf-8")
+
+    _fail_atomic_write_on_cover_letter(monkeypatch)
+
+    with pytest.raises(SystemExit, match="still holds an older cover letter"):
+        jobs_cli._write_tailoring_files(str(tmp_path), 1, "TAILORED RESUME", "COVER LETTER")
+
+    assert (tmp_path / "1_resume.txt").read_text(encoding="utf-8") == "TAILORED RESUME"
+    assert stale_cover_letter.read_text(encoding="utf-8") == "OLD COVER LETTER"
+
+
+def test_write_tailoring_files_also_catches_a_value_error_from_the_cover_letter_write(tmp_path, monkeypatch):
+    # _atomic_write_text's own raise site catches (OSError, ValueError) -
+    # ValueError is a real failure mode (e.g. a closed/invalid file object
+    # inside open()), not just OSError, and both new tests above only ever
+    # trigger OSError.
+    _fail_atomic_write_on_cover_letter(monkeypatch, exc=ValueError("simulated encoding failure"))
+
+    with pytest.raises(SystemExit, match="was never written"):
+        jobs_cli._write_tailoring_files(str(tmp_path), 1, "TAILORED RESUME", "COVER LETTER")
+
+    assert (tmp_path / "1_resume.txt").read_text(encoding="utf-8") == "TAILORED RESUME"
+
+
+def test_write_tailoring_files_retry_after_failure_produces_a_clean_matched_pair(tmp_path, monkeypatch):
+    # Proves the design's central recovery advice ("re-run tailor to
+    # regenerate both fresh") actually works, not just that the failure
+    # state itself looks reasonable in isolation.
+    _fail_atomic_write_on_cover_letter(monkeypatch)
+    with pytest.raises(SystemExit):
+        jobs_cli._write_tailoring_files(str(tmp_path), 1, "TAILORED RESUME V1", "COVER LETTER V1")
+
+    monkeypatch.undo()  # restore the real _atomic_write_text for the retry
+    jobs_cli._write_tailoring_files(str(tmp_path), 1, "TAILORED RESUME V2", "COVER LETTER V2")
+
+    assert (tmp_path / "1_resume.txt").read_text(encoding="utf-8") == "TAILORED RESUME V2"
+    assert (tmp_path / "1_cover_letter.txt").read_text(encoding="utf-8") == "COVER LETTER V2"
+
+
+def test_write_tailoring_files_needs_no_special_handling_when_the_resume_write_itself_fails(tmp_path, monkeypatch):
+    # A pre-existing cover letter from a prior successful run must be left
+    # completely untouched - the resume write's own atomic-write contract
+    # already guarantees nothing was written on this path, so the
+    # cover-letter branch never even runs.
+    stale_cover_letter = tmp_path / "1_cover_letter.txt"
+    stale_cover_letter.write_text("OLD COVER LETTER", encoding="utf-8")
+
+    monkeypatch.setattr(jobs_cli, "_atomic_write_text", MagicMock(side_effect=OSError("simulated disk failure")))
+
+    with pytest.raises(OSError, match="simulated disk failure"):
+        jobs_cli._write_tailoring_files(str(tmp_path), 1, "TAILORED RESUME", "COVER LETTER")
+
+    assert not (tmp_path / "1_resume.txt").exists()
+    assert stale_cover_letter.read_text(encoding="utf-8") == "OLD COVER LETTER"
+
+
+def test_cmd_tailor_cover_letter_write_failure_raises_through_the_real_cli_wiring(env, tmp_path, monkeypatch, capsys):
+    # Driven through build_parser()/args.func (this file's own stated test
+    # philosophy), not just the internal helper directly - proves the
+    # SystemExit, the printed recovery text, and the untouched cover-letter
+    # path all actually survive the full path, not just the helper in
+    # isolation (the direct-call tests above proved the same claims, but
+    # only by calling _write_tailoring_files themselves).
+    _fail_atomic_write_on_cover_letter(monkeypatch)
+    txt_out_dir = tmp_path / "tailored_txt"
+    argv = [
+        "tailor",
+        str(env["job_id"]),
+        "--db",
+        str(env["jobs_db"]),
+        "--profile-db",
+        str(env["profile_db"]),
+        "--out-dir",
+        str(txt_out_dir),
+    ]
+
+    with pytest.raises(SystemExit, match="fresh resume text"):
+        _run(argv)
+
+    assert (txt_out_dir / f"{env['job_id']}_resume.txt").read_text(encoding="utf-8") == "TAILORED RESUME"
+    assert not (txt_out_dir / f"{env['job_id']}_cover_letter.txt").exists()
+
+    out = capsys.readouterr().out
+    assert "TAILORED RESUME" in out
+    assert "COVER LETTER" in out
+
+
 def test_cmd_tailor_unknown_job_id_raises_system_exit(env, tmp_path):
     """Driven through the real CLI wiring (`build_parser()`/`args.func`),
     matching this file's own stated test philosophy - not just the

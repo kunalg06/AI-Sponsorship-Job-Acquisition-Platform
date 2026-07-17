@@ -295,18 +295,59 @@ def _atomic_write_text(path: Path, content: str) -> None:
 
 
 def _write_tailoring_files(out_dir: str, job_id: int, tailored_resume: str, cover_letter: str) -> None:
-    # Deliberately no try/except here (or in _migrate_legacy_text below): only the
-    # outreach draft write (see _draft_and_store_outreach) runs after a DB commit
-    # that would otherwise silently desync, so only that site needs a distinct
-    # failure message. A raised OSError here propagates uncaught, same as before
-    # this file's writes became atomic - unchanged behavior, just no longer able
-    # to leave a truncated file behind.
+    # Deliberately no try/except around the resume write (or in
+    # _migrate_legacy_text below): a raised OSError/ValueError here propagates
+    # uncaught, same as before this file's writes became atomic - unchanged
+    # behavior, just no longer able to leave a truncated file behind.
+    #
+    # The cover-letter write DOES get a try/except, to turn a failure there
+    # into a clear, distinct message instead of a bare OSError - by this
+    # point resume_path already holds this run's fresh text while
+    # cover_letter_path doesn't, and on a re-run (as opposed to a first
+    # tailor for this job_id) cover_letter_path still holds an *older*
+    # cover letter, not nothing. Deleting the just-written resume to "clean
+    # up" was considered and rejected: it can't tell a first run (where
+    # nothing existed before, so deleting the resume genuinely restores
+    # "neither file exists") apart from a re-run (where cover_letter_path
+    # already had real content), and blindly deleting on a re-run only
+    # replaces one mismatch (new resume + stale cover letter) with a worse
+    # one (no resume + stale cover letter, with the fresh resume text
+    # gone). So this leaves both files exactly as they land - resume
+    # updated, cover letter untouched - and instead prints the freshly
+    # generated text for manual recovery (mirroring _draft_and_store_outreach's
+    # identical "already generated, about to be lost" situation) and raises
+    # a message naming precisely which file is fresh and which is stale.
+    #
+    # Note the asymmetry: a resume-write failure propagates as a bare
+    # OSError/ValueError (this function's original, unchanged behavior for
+    # that branch); a cover-letter-write failure raises SystemExit instead.
+    # _cmd_tailor, the only current caller, doesn't catch either type, so
+    # both already surface identically to a real CLI invocation - but a
+    # future caller that catches `Exception` specifically would only catch
+    # the first branch, since SystemExit is a BaseException.
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
     resume_path = out_path / f"{job_id}_resume.txt"
     cover_letter_path = out_path / f"{job_id}_cover_letter.txt"
     _atomic_write_text(resume_path, tailored_resume)
-    _atomic_write_text(cover_letter_path, cover_letter)
+    try:
+        _atomic_write_text(cover_letter_path, cover_letter)
+    except (OSError, ValueError) as exc:
+        cover_letter_state = (
+            "still holds an older cover letter from a previous run"
+            if cover_letter_path.exists()
+            else "was never written"
+        )
+        print("  --- Tailored resume text (recover this before it's gone) ---")
+        print(f"  {tailored_resume}")
+        print("  --- Cover letter text (recover this before it's gone) ---")
+        print(f"  {cover_letter}")
+        raise SystemExit(
+            f"Job #{job_id}: {resume_path} now holds this run's fresh resume text, but the cover "
+            f"letter failed to write to {cover_letter_path}: {exc} - it {cover_letter_state}. "
+            f"Re-run `tailor` to regenerate both fresh; this run's text is printed above in case "
+            f"you want it now."
+        )
     print(f"  Written to: {resume_path}")
     print(f"              {cover_letter_path}")
 
