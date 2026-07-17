@@ -3,11 +3,14 @@ from unittest.mock import MagicMock
 
 import docx
 from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 from resume.extract import (
     MODEL,
     ResumeProfile,
     _iter_body_content_including_sdt,
+    _iter_row_tc_elements,
+    _table_has_any_sdt_wrapping,
     extract_profile,
     extract_text_from_docx,
 )
@@ -336,3 +339,258 @@ def test_iter_body_content_including_sdt_reads_multiple_block_children_in_one_wr
     items = list(_iter_body_content_including_sdt(doc))
 
     assert [item.text for item in items] == ["First in wrapper", "Second in wrapper"]
+
+
+def test_extract_text_from_docx_reads_a_table_row_wrapped_in_a_content_control():
+    doc = docx.Document()
+    table = doc.add_table(rows=3, cols=1)
+    table.cell(0, 0).text = "Row 1"
+    table.cell(1, 0).text = "Row 2 (wrapped)"
+    table.cell(2, 0).text = "Row 3"
+    _wrap_in_sdt(table.rows[1]._tr)
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+
+    result = extract_text_from_docx(buffer)
+
+    assert result == "Row 1\nRow 2 (wrapped)\nRow 3"
+
+
+def test_extract_text_from_docx_reads_a_cell_wrapped_in_a_content_control():
+    doc = docx.Document()
+    table = doc.add_table(rows=1, cols=3)
+    table.cell(0, 0).text = "A"
+    table.cell(0, 1).text = "B (wrapped)"
+    table.cell(0, 2).text = "C"
+    _wrap_in_sdt(table.cell(0, 1)._tc)
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+
+    result = extract_text_from_docx(buffer)
+
+    assert result == "A | B (wrapped) | C"
+
+
+def test_extract_text_from_docx_reads_an_in_cell_paragraph_wrapped_in_a_content_control():
+    doc = docx.Document()
+    table = doc.add_table(rows=1, cols=1)
+    cell = table.cell(0, 0)
+    cell.text = "First paragraph"
+    wrapped_paragraph = cell.add_paragraph("Second paragraph (wrapped)")
+    _wrap_in_sdt(wrapped_paragraph._p)
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+
+    result = extract_text_from_docx(buffer)
+
+    assert result == "First paragraph Second paragraph (wrapped)"
+
+
+def test_extract_text_from_docx_still_dedupes_a_horizontal_merge_when_the_row_is_wrapped():
+    # Combines CAP-1 with the existing merge-dedup guarantee (CAP-4) - a
+    # merged cell must still appear once, not twice, even when the whole
+    # row containing it is itself sdt-wrapped.
+    doc = docx.Document()
+    table = doc.add_table(rows=2, cols=2)
+    table.cell(0, 0).merge(table.cell(0, 1))
+    table.cell(0, 0).text = "Skills (wrapped row)"
+    table.cell(1, 0).text = "Python"
+    table.cell(1, 1).text = "5 years"
+    _wrap_in_sdt(table.rows[0]._tr)
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+
+    result = extract_text_from_docx(buffer)
+
+    assert result == "Skills (wrapped row)\nPython | 5 years"
+
+
+def test_extract_text_from_docx_still_repeats_a_vertical_merge_when_nothing_nearby_is_wrapped():
+    # Pins CAP-4's existing vertical-merge-repetition guarantee completely
+    # untouched by this diff (no sdt-wrapping anywhere in or near the
+    # table) - the counterpart to the two residual tests below, which cover
+    # what happens once sdt-wrapping IS present nearby.
+    doc = docx.Document()
+    table = doc.add_table(rows=2, cols=2)
+    table.cell(0, 0).merge(table.cell(1, 0))
+    table.cell(0, 0).text = "Skills"
+    table.cell(0, 1).text = "A"
+    table.cell(1, 1).text = "B"
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+
+    result = extract_text_from_docx(buffer)
+
+    assert result == "Skills | A\nSkills | B"
+
+
+def test_iter_row_tc_elements_shows_blank_instead_of_wrong_content_when_the_top_cell_is_wrapped():
+    # A more serious trap than a wrapped continuation cell (see the test
+    # below): wrapping the TOP (content-holding) cell of a vertical merge
+    # doesn't just make it unreachable - CT_Tc.grid_offset's search inside
+    # the row above (tc_at_grid_offset, direct-<w:tc>-children only) can
+    # silently resolve to the WRONG cell instead of raising, since wrapping
+    # removes the real cell from that row's direct-child count. Confirmed
+    # via a live repro before this guard existed: the continuation row
+    # showed the *sibling* cell's text ("A") instead of "Skills" or a
+    # blank. The fix must degrade to blank, never to wrong-but-plausible
+    # content - this is why any w:sdt use anywhere in the table disables
+    # vMerge resolution for the WHOLE table (see _table_has_any_sdt_wrapping),
+    # not just a narrower per-row check (an earlier, rejected design - see
+    # the row-level tests below for why that turned out unsafe too).
+    doc = docx.Document()
+    table = doc.add_table(rows=2, cols=2)
+    table.cell(0, 0).merge(table.cell(1, 0))
+    table.cell(0, 0).text = "Skills"
+    table.cell(0, 1).text = "A"
+    table.cell(1, 1).text = "B"
+    _wrap_in_sdt(table.cell(0, 0)._tc)
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+
+    result = extract_text_from_docx(buffer)  # must not raise, and must not show "A" for column 0
+
+    assert result == "Skills | A\n | B"
+
+
+def test_iter_row_tc_elements_shows_its_own_literal_content_for_a_wrapped_vmerge_continuation_cell():
+    # Whitebox test of _iter_row_tc_elements in isolation, given an
+    # explicit vmerge_resolution_is_safe=False - does NOT exercise
+    # _table_has_any_sdt_wrapping itself (that's covered by the
+    # extract_text_from_docx-level tests around this one). What this DOES
+    # prove: even setting the table-level flag aside, a cell found by
+    # unwrapping a w:sdt still never reaches vMerge resolution, because
+    # its real parent is w:sdtContent, not w:tr - rather than resolve
+    # incorrectly, it's shown with its own (here, empty) literal content -
+    # and critically, this must not corrupt or crash extraction of the
+    # row's OTHER cells.
+    doc = docx.Document()
+    table = doc.add_table(rows=2, cols=2)
+    table.cell(0, 0).merge(table.cell(1, 0))
+    table.cell(0, 0).text = "Skills"
+    table.cell(0, 1).text = "A"
+    table.cell(1, 1).text = "B"
+    # table.cell(1, 0) resolves vMerge automatically and returns the SAME
+    # _Cell as cell(0, 0) - the raw, physically-present continuation <w:tc>
+    # (with its own empty <w:p/>) must be found via the row's own oxml
+    # children instead.
+    continuation_tc = table.rows[1]._tr.tc_lst[0]
+    assert continuation_tc.vMerge == "continue"
+    _wrap_in_sdt(continuation_tc)
+
+    tc_elements = list(_iter_row_tc_elements(table.rows[1]._tr, vmerge_resolution_is_safe=False))
+
+    assert len(tc_elements) == 2
+    assert tc_elements[0] is continuation_tc  # shown literally, not resolved to the cell above
+    assert tc_elements[1].xpath("string(.)") == "B"  # the sibling cell is unaffected
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+
+    result = extract_text_from_docx(buffer)  # must not raise
+
+    assert result == "Skills | A\n | B"
+
+
+def test_extract_text_from_docx_does_not_crash_when_a_vmerge_continuation_row_is_wrapped():
+    # A real bug found during review, not anticipated up front: CT_Tc._tr_above's
+    # xpath ("./ancestor::w:tr[position()=1]/preceding-sibling::w:tr[1]") raises
+    # ValueError ("no tr above topmost tr in w:tbl") when the row it's
+    # searching from is itself w:sdt-wrapped, since that row's real parent
+    # becomes w:sdtContent, not w:tbl - preceding-sibling then finds nothing.
+    # A per-row guard checking only the CELLS (not the row element itself)
+    # didn't catch this; confirmed via a live repro that it crashed the
+    # entire extraction, not just this one row.
+    doc = docx.Document()
+    table = doc.add_table(rows=2, cols=2)
+    table.cell(0, 0).merge(table.cell(1, 0))
+    table.cell(0, 0).text = "Skills"
+    table.cell(0, 1).text = "A"
+    table.cell(1, 1).text = "B"
+    _wrap_in_sdt(table.rows[1]._tr)  # wrap the row holding the continuation cell
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+
+    result = extract_text_from_docx(buffer)  # must not raise
+
+    assert result == "Skills | A\n | B"
+
+
+def test_extract_text_from_docx_does_not_crash_when_the_row_above_a_vmerge_continuation_is_wrapped():
+    # The mirror image of the test above: wrapping the row ABOVE the
+    # continuation cell (the one holding the real content) also breaks
+    # _tr_above's xpath assumptions for the continuation row's own lookup,
+    # for the identical underlying reason.
+    doc = docx.Document()
+    table = doc.add_table(rows=2, cols=2)
+    table.cell(0, 0).merge(table.cell(1, 0))
+    table.cell(0, 0).text = "Skills"
+    table.cell(0, 1).text = "A"
+    table.cell(1, 1).text = "B"
+    _wrap_in_sdt(table.rows[0]._tr)  # wrap the row holding the real content
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+
+    result = extract_text_from_docx(buffer)  # must not raise
+
+    assert result == "Skills | A\n | B"
+
+
+def test_extract_text_from_docx_disables_vmerge_repetition_for_an_unrelated_merge_in_the_same_table():
+    # Demonstrates the actual documented tradeoff, not just asserting it in
+    # prose: wrapping a cell involved in ONE vertical merge (column 0)
+    # disables repetition for a SECOND, structurally independent vertical
+    # merge elsewhere in the SAME table (column 1) that has nothing to do
+    # with the wrapped cell - the whole-table guard is intentionally this
+    # wide, in exchange for the correctness guarantees the earlier
+    # per-row/per-cell guards couldn't provide.
+    doc = docx.Document()
+    table = doc.add_table(rows=4, cols=2)
+    table.cell(0, 0).merge(table.cell(1, 0))
+    table.cell(2, 1).merge(table.cell(3, 1))
+    table.cell(0, 0).text = "Skills"
+    table.cell(0, 1).text = "X"
+    table.cell(1, 1).text = "Y"
+    table.cell(2, 0).text = "P"
+    table.cell(2, 1).text = "Notes"
+    table.cell(3, 0).text = "Q"
+    _wrap_in_sdt(table.cell(0, 0)._tc)  # only touches the FIRST merge's top cell
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+
+    result = extract_text_from_docx(buffer)
+
+    assert result == "Skills | X\n | Y\nP | Notes\nQ | "
+
+
+def test_table_has_any_sdt_wrapping_is_false_for_a_table_with_no_rows():
+    # A <w:tbl> with zero <w:tr> children is invalid per OOXML but
+    # plausible from a hand-crafted or corrupted file - must degrade
+    # safely (no IndexError/ZeroDivisionError) rather than crash the
+    # detector for the whole document.
+    doc = docx.Document()
+    table = doc.add_table(rows=1, cols=1)
+    tbl_element = table._tbl
+    for tr in list(tbl_element.findall(qn("w:tr"))):
+        tbl_element.remove(tr)
+
+    assert _table_has_any_sdt_wrapping(tbl_element) is False
