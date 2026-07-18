@@ -14,6 +14,7 @@ import streamlit as st
 from jobs.cli import DEFAULT_GENERATED_CV_DIR, _read_outreach_message_text, _resolve_contact, _tailored_docx_paths
 from jobs.db import connect as connect_jobs
 from jobs.db import get_job, list_applied_jobs, mark_applied, mark_discarded, mark_reminders_sent_through
+from jobs.digest import list_due_reminders
 from jobs.outreach import EMAIL, LINKEDIN_NOTE, OutreachLengthError
 from jobs.outreach_db import ensure_schema as ensure_outreach_schema
 from jobs.outreach_db import insert_contact, list_contacts, list_outreach_messages
@@ -67,23 +68,21 @@ with st.expander("\U0001f4ec Application Tracker (day 3 / 7 / 14 follow-ups)"):
     jobs_conn = connect_jobs(JOBS_DB)
     try:
         applied_jobs = list_applied_jobs(jobs_conn)
+        due_reminders = list_due_reminders(applied_jobs)
     finally:
         jobs_conn.close()
 
     if not applied_jobs:
         st.caption("No applications marked yet - use \"Mark as applied\" below once you've applied to a job.")
     else:
-        due_jobs = []
-        for job in applied_jobs:
-            milestone = due_milestone(
-                job["applied_at"], job["reminder_3_sent_at"], job["reminder_7_sent_at"], job["reminder_14_sent_at"]
-            )
-            due_jobs.append((job, milestone, days_since(job["applied_at"])))
+        jobs_by_id = {job["id"]: job for job in applied_jobs}
 
-        due_now = [entry for entry in due_jobs if entry[1] is not None]
-        if due_now:
+        if due_reminders:
             st.markdown("**Due for follow-up:**")
-            for tracked_job, milestone, days in due_now:
+            for reminder in due_reminders:
+                tracked_job = jobs_by_id[reminder.job_id]
+                milestone = reminder.milestone
+                days = reminder.days
                 st.markdown(
                     f"**#{tracked_job['id']} {tracked_job['job_title']}** @ {tracked_job['company_name'] or '-'} "
                     f"— day {days} (day-{milestone} follow-up due)"
@@ -144,8 +143,10 @@ with st.expander("\U0001f4ec Application Tracker (day 3 / 7 / 14 follow-ups)"):
             st.caption("Nothing due right now.")
 
         st.markdown("**All applied jobs:**")
-        for tracked_job, milestone, days in due_jobs:
-            st.caption(f"#{tracked_job['id']} {tracked_job['job_title']} @ {tracked_job['company_name'] or '-'} — day {days}")
+        for job in applied_jobs:
+            st.caption(
+                f"#{job['id']} {job['job_title']} @ {job['company_name'] or '-'} — day {days_since(job['applied_at'])}"
+            )
 
 with st.expander("\U0001f4c1 All previously generated resumes & cover letters"):
     generated_root = Path(DEFAULT_GENERATED_CV_DIR)

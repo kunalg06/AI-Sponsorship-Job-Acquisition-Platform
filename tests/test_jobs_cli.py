@@ -13,6 +13,7 @@ from __future__ import annotations
 import builtins
 import os
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -22,7 +23,7 @@ import pytest
 import jobs.cli as jobs_cli
 from jobs.cli import _outreach_message_path, _sanitize_filename, _tailored_docx_paths, build_parser
 from jobs.db import connect as connect_jobs
-from jobs.db import get_job, insert_job, try_claim_tailoring_lock
+from jobs.db import get_job, insert_job, mark_applied, try_claim_tailoring_lock
 from jobs.extract import JobExtraction
 from jobs.outreach import EMAIL, LINKEDIN_NOTE, OutreachDraft
 from jobs.outreach_db import ensure_schema as ensure_outreach_schema
@@ -1234,3 +1235,73 @@ def test_cmd_outreach_write_failure_survives_the_write_failure_marker_itself_fai
                 str(outreach_env["out_dir"]),
             ]
         )
+
+
+# --------------------------------------------------------------------------
+# `due` / `digest` - both driven through the real CLI wiring, matching this
+# file's own stated test philosophy
+# --------------------------------------------------------------------------
+
+
+def _make_overdue_applied_job(jobs_db_path: Path, *, company_name: str, days_ago: int) -> int:
+    job_id = _make_job(jobs_db_path, company_name=company_name)
+    conn = connect_jobs(jobs_db_path)
+    try:
+        mark_applied(conn, job_id)
+        when = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+        conn.execute("UPDATE jobs SET applied_at = ? WHERE id = ?", (when, job_id))
+        conn.commit()
+    finally:
+        conn.close()
+    return job_id
+
+
+def test_cmd_due_reports_an_overdue_applied_job(tmp_path, capsys):
+    jobs_db = tmp_path / "jobs.db"
+    job_id = _make_overdue_applied_job(jobs_db, company_name="Overdue Co", days_ago=4)
+
+    _run(["due", "--db", str(jobs_db)])
+
+    out = capsys.readouterr().out
+    assert f"#{job_id:>4}" in out
+    assert "day-3 follow-up due" in out
+
+
+def test_cmd_due_reports_nothing_due_when_no_applied_jobs(tmp_path, capsys):
+    jobs_db = tmp_path / "jobs.db"
+    connect_jobs(jobs_db).close()
+
+    _run(["due", "--db", str(jobs_db)])
+
+    assert "Nothing due right now." in capsys.readouterr().out
+
+
+def test_cmd_digest_includes_the_same_due_reminder_as_cmd_due(tmp_path, capsys):
+    jobs_db = tmp_path / "jobs.db"
+    job_id = _make_overdue_applied_job(jobs_db, company_name="Overdue Co", days_ago=4)
+
+    _run(["digest", "--db", str(jobs_db)])
+
+    out = capsys.readouterr().out
+    assert "=== Due for follow-up ===" in out
+    assert f"#{job_id:>4}" in out
+    assert "day-3 follow-up due" in out
+    # the other three sections still render on an otherwise-empty DB
+    assert "Nothing waiting on a decision." in out
+    assert "No repeated gaps yet." in out
+    assert "=== Momentum ===" in out
+
+
+def test_cmd_digest_on_an_empty_db_shows_every_section_as_empty(tmp_path, capsys):
+    jobs_db = tmp_path / "jobs.db"
+    connect_jobs(jobs_db).close()
+
+    _run(["digest", "--db", str(jobs_db)])
+
+    out = capsys.readouterr().out
+    assert "Nothing due right now." in out
+    assert "Nothing waiting on a decision." in out
+    assert "No repeated gaps yet." in out
+    assert "Applications in the last 7 days: 0" in out
+    assert "Last outreach drafted: none yet" in out
+    assert "Last tailored: none yet" in out

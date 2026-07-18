@@ -36,6 +36,7 @@ from jobs.db import (
     update_sponsor_verdict,
     update_tailoring,
 )
+from jobs.digest import DueReminder, build_digest, list_due_reminders
 from jobs.docx_tailor import (
     build_tailored_docx,
     estimate_page_risk,
@@ -986,29 +987,65 @@ def _cmd_discard(args: argparse.Namespace) -> None:
         conn.close()
 
 
+def _format_due_reminder_line(r: DueReminder) -> str:
+    return (
+        f"#{r.job_id:>4}  {r.job_title:<40} {r.company_name or '-':<30} "
+        f"day {r.days} (day-{r.milestone} follow-up due)"
+    )
+
+
 def _cmd_due(args: argparse.Namespace) -> None:
     conn = connect(args.db)
     try:
-        applied = list_applied_jobs(conn)
+        reminders = list_due_reminders(list_applied_jobs(conn))
     finally:
         conn.close()
 
-    due_any = False
-    for job in applied:
-        milestone = due_milestone(
-            job["applied_at"], job["reminder_3_sent_at"], job["reminder_7_sent_at"], job["reminder_14_sent_at"]
-        )
-        if milestone is None:
-            continue
-        due_any = True
-        days = days_since(job["applied_at"])
-        print(
-            f"#{job['id']:>4}  {job['job_title']:<40} {job['company_name'] or '-':<30} "
-            f"day {days} (day-{milestone} follow-up due)"
-        )
-
-    if not due_any:
+    if not reminders:
         print("Nothing due right now.")
+        return
+    for r in reminders:
+        print(_format_due_reminder_line(r))
+
+
+def _cmd_digest(args: argparse.Namespace) -> None:
+    conn = connect(args.db)
+    try:
+        result = build_digest(conn)
+    finally:
+        conn.close()
+
+    print("=== Due for follow-up ===")
+    if not result.due_reminders:
+        print("Nothing due right now.")
+    else:
+        for r in result.due_reminders:
+            print(_format_due_reminder_line(r))
+
+    print()
+    print("=== Match queue (scored, not yet decided) ===")
+    if not result.match_queue:
+        print("Nothing waiting on a decision.")
+    else:
+        for m in result.match_queue:
+            print(
+                f"#{m.job_id:>4}  {m.job_title:<40} {m.company_name or '-':<30} "
+                f"{m.match_score}/100 {m.match_verdict}"
+            )
+
+    print()
+    print("=== Recurring portfolio gaps ===")
+    if not result.gap_themes:
+        print("No repeated gaps yet.")
+    else:
+        for g in result.gap_themes:
+            print(f"  ({g.count}x) {g.gap}")
+
+    print()
+    print("=== Momentum ===")
+    print(f"Applications in the last 7 days: {result.momentum.applications_last_7_days}")
+    print(f"Last outreach drafted: {result.momentum.last_outreach_drafted_at or 'none yet'}")
+    print(f"Last tailored: {result.momentum.last_tailored_at or 'none yet'}")
 
 
 def _cmd_follow_up(args: argparse.Namespace) -> None:
@@ -1247,6 +1284,12 @@ def build_parser() -> argparse.ArgumentParser:
     due_parser = subparsers.add_parser("due", help="List applied jobs with a day 3/7/14 follow-up due")
     due_parser.add_argument("--db", default=DEFAULT_DB, help="Jobs SQLite db path")
     due_parser.set_defaults(func=_cmd_due)
+
+    digest_parser = subparsers.add_parser(
+        "digest", help="Daily coach digest: due follow-ups, match queue, recurring gaps, and momentum"
+    )
+    digest_parser.add_argument("--db", default=DEFAULT_DB, help="Jobs SQLite db path")
+    digest_parser.set_defaults(func=_cmd_digest)
 
     follow_up_parser = subparsers.add_parser(
         "follow-up", help="Draft a follow-up for an applied job's due reminder (or --force to draft anyway)"
