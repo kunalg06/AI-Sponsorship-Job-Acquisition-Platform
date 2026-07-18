@@ -18,13 +18,16 @@ from jobs.digest import list_due_reminders
 from jobs.outreach import EMAIL, LINKEDIN_NOTE, OutreachLengthError
 from jobs.outreach_db import ensure_schema as ensure_outreach_schema
 from jobs.outreach_db import insert_contact, list_contacts, list_outreach_messages
+from jobs.pdf_export import PdfConversionError, convert_docx_to_pdf
 from jobs.sponsor_check import CANNOT_VERIFY, CONFIRMED, FUZZY_MATCH, NOT_FOUND, USER_CONFIRMED, USER_FLAGGED
 from jobs.tracker import APPLIED, DISCARDED, days_since, due_milestone
 from jobs.ui_actions import draft_and_save_outreach, error_display_text, generate_tailored_docx_for_job
+from views.theme import set_page_wonk
 
 JOBS_DB = "data/jobs.db"
 PROFILE_DB = "data/profile.db"
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+PDF_MIME = "application/pdf"
 
 STATUS_COLOR = {
     CONFIRMED: "green",
@@ -42,26 +45,63 @@ CHANNEL_LABELS = {
 CHANNEL_ORDER = [LINKEDIN_NOTE, EMAIL]
 
 
+def _ensure_pdf(docx_path: Path) -> Path | None:
+    """Reuse an existing PDF rendered from `docx_path` if it's still fresh
+    (the .docx hasn't changed since), otherwise (re)convert - Streamlit
+    reruns this page on every widget interaction, so converting
+    unconditionally here would re-run LibreOffice on every rerun, not just
+    once per actual tailoring. Returns None (not a crash) on any conversion
+    failure - a PDF option going away should never block the .docx
+    download, which stays the reliable path regardless."""
+    pdf_path = docx_path.with_suffix(".pdf")
+    if pdf_path.exists() and pdf_path.stat().st_mtime >= docx_path.stat().st_mtime:
+        return pdf_path
+    try:
+        return convert_docx_to_pdf(docx_path)
+    except PdfConversionError as exc:
+        st.warning(f"Couldn't generate a PDF for {docx_path.name}: {exc}")
+        return None
+
+
 def _render_download_buttons(resume_path: Path, cover_letter_path: Path, key_prefix: str) -> None:
-    cols = st.columns(2)
+    cols = st.columns(4)
     if resume_path.exists():
         cols[0].download_button(
-            "\U0001f4c4 Download resume (.docx)",
+            "\U0001f4c4 Resume (.docx)",
             data=resume_path.read_bytes(),
             file_name=resume_path.name,
             mime=DOCX_MIME,
             key=f"{key_prefix}_resume",
         )
+        resume_pdf = _ensure_pdf(resume_path)
+        if resume_pdf is not None:
+            cols[1].download_button(
+                "\U0001f4d1 Resume (.pdf)",
+                data=resume_pdf.read_bytes(),
+                file_name=resume_pdf.name,
+                mime=PDF_MIME,
+                key=f"{key_prefix}_resume_pdf",
+            )
     if cover_letter_path.exists():
-        cols[1].download_button(
-            "\U0001f4c4 Download cover letter (.docx)",
+        cols[2].download_button(
+            "\U0001f4c4 Cover letter (.docx)",
             data=cover_letter_path.read_bytes(),
             file_name=cover_letter_path.name,
             mime=DOCX_MIME,
             key=f"{key_prefix}_cover",
         )
+        cover_pdf = _ensure_pdf(cover_letter_path)
+        if cover_pdf is not None:
+            cols[3].download_button(
+                "\U0001f4d1 Cover letter (.pdf)",
+                data=cover_pdf.read_bytes(),
+                file_name=cover_pdf.name,
+                mime=PDF_MIME,
+                key=f"{key_prefix}_cover_pdf",
+            )
 
 
+set_page_wonk("low")  # dense working table - Fraunces stays calm here, not quirky
 st.title("\U0001f4cb Jobs")
 
 with st.expander("\U0001f4ec Application Tracker (day 3 / 7 / 14 follow-ups)"):

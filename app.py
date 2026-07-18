@@ -46,6 +46,10 @@ if "GENERATED_CV_DIR" not in os.environ:
 
 st.set_page_config(page_title="Sponsorship Job Assistant", page_icon="\U0001f9ed", layout="centered")
 
+from views.theme import inject_base_css  # noqa: E402 (must follow set_page_config)
+
+inject_base_css()
+
 pg = st.navigation(
     [
         st.Page("views/intake.py", title="Paste a Job Posting", icon="\U0001f9ed", default=True),

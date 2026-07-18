@@ -7,14 +7,20 @@ surfaces can't drift since they share one source of truth.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import streamlit as st
 
 from jobs.db import connect as connect_jobs
 from jobs.digest import build_digest
+from views.theme import mono, set_page_wonk
 
 JOBS_DB = "data/jobs.db"
 
+set_page_wonk("high")  # the "coach" page - read like a note left on your desk
 st.title("\U0001f9ed Daily Coach Digest")
+st.markdown(mono(datetime.now(timezone.utc).strftime("%A · %d %b %Y")), unsafe_allow_html=True)
+st.divider()
 
 jobs_conn = connect_jobs(JOBS_DB)
 try:
@@ -50,6 +56,8 @@ else:
 
 st.divider()
 st.subheader("Momentum")
-st.metric("Applications in the last 7 days", digest.momentum.applications_last_7_days)
+count = digest.momentum.applications_last_7_days
+applications_line = "No applications" if count == 0 else f"{count} application{'s' if count != 1 else ''}"
+st.markdown(f"> *{applications_line} this week.*")
 st.caption(f"Last outreach drafted: {digest.momentum.last_outreach_drafted_at or 'none yet'}")
 st.caption(f"Last tailored: {digest.momentum.last_tailored_at or 'none yet'}")

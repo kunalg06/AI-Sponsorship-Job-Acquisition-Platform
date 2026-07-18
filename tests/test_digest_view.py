@@ -116,5 +116,5 @@ def test_digest_page_shows_nonzero_momentum(streamlit_data_env):
     at = AppTest.from_file(DIGEST_PY)
     at.run()
 
-    metrics = {m.label: m.value for m in at.metric}
-    assert metrics["Applications in the last 7 days"] == "1"
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "1 application this week" in markdown_text

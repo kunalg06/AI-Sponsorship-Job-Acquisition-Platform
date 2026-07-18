@@ -49,6 +49,8 @@ This opens the Streamlit UI: paste a job posting in, review the roadmap, or brow
 
 `app.py` bridges `GEMINI_API_KEY` from Cloud's Secrets UI (`st.secrets`) into `os.environ` on startup, since `genai.Client()` only reads the latter — set the key under **Settings → Secrets** in the Cloud app dashboard (as `GEMINI_API_KEY = "..."`). A local `.env`/real environment variable always takes precedence over `st.secrets` if both happen to be set.
 
+`packages.txt` (`libreoffice`) tells Cloud to apt-install LibreOffice, which `jobs.pdf_export` shells out to (headless) for the resume/cover-letter PDF download buttons — the same binary this project uses locally. Installing the full `libreoffice` package noticeably slows Cloud's first build/cold start; that's accepted as the cost of faithfully rendering the original `.docx` formatting rather than reinterpreting it through a lossier docx→HTML→PDF path.
+
 Local state (`data/*.db`, `cv/`) still needs addressing separately — see `_bmad-output/implementation-artifacts/deferred-work.md`.
 
 ## CLI tools

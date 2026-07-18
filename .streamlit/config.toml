@@ -1,22 +1,91 @@
+[server]
+enableStaticServing = true
+
 [theme]
 base = "dark"
-font = "sans-serif"
-headingFont = "sans-serif"
+font = "IBMPlexSans"
+headingFont = "Fraunces"
 baseRadius = "small"
 showSidebarBorder = true
 
 [theme.dark]
-primaryColor = "#D99A3D"
-backgroundColor = "#13161D"
-secondaryBackgroundColor = "#1D212B"
-textColor = "#E9E7E0"
-borderColor = "#2B2F3A"
-linkColor = "#D99A3D"
+primaryColor = "#E08A5B"
+backgroundColor = "#1E1712"
+secondaryBackgroundColor = "#28201A"
+textColor = "#EDE1CC"
+borderColor = "#3A2E22"
+linkColor = "#E08A5B"
 
 [theme.light]
-primaryColor = "#B87B1E"
-backgroundColor = "#FAF9F6"
-secondaryBackgroundColor = "#F0EEE8"
-textColor = "#1C1B18"
-borderColor = "#E0DDD3"
-linkColor = "#B87B1E"
+primaryColor = "#B5533C"
+backgroundColor = "#F6EEDE"
+secondaryBackgroundColor = "#EEE2C9"
+textColor = "#2B2117"
+borderColor = "#DCCBA8"
+linkColor = "#B5533C"
+
+# Fraunces - variable display face (weight 100-900 + optical size + the
+# WONK axis, dialed per-page via font-variation-settings in each view's own
+# injected CSS - low WONK on the dense Jobs List table, higher elsewhere).
+# Google Fonts, SIL Open Font License - see static/OFL-Fraunces.txt.
+[[theme.fontFaces]]
+family="Fraunces"
+url="app/static/Fraunces-Variable.woff2"
+style="normal"
+weight="100 900"
+
+[[theme.fontFaces]]
+family="Fraunces"
+url="app/static/Fraunces-Italic-Variable.woff2"
+style="italic"
+weight="100 900"
+
+# IBM Plex Sans - body/UI text. SIL Open Font License.
+[[theme.fontFaces]]
+family="IBMPlexSans"
+url="app/static/PlexSans-Regular.woff2"
+style="normal"
+weight=400
+
+[[theme.fontFaces]]
+family="IBMPlexSans"
+url="app/static/PlexSans-Italic.woff2"
+style="italic"
+weight=400
+
+[[theme.fontFaces]]
+family="IBMPlexSans"
+url="app/static/PlexSans-Medium.woff2"
+style="normal"
+weight=500
+
+[[theme.fontFaces]]
+family="IBMPlexSans"
+url="app/static/PlexSans-SemiBold.woff2"
+style="normal"
+weight=600
+
+[[theme.fontFaces]]
+family="IBMPlexSans"
+url="app/static/PlexSans-Bold.woff2"
+style="normal"
+weight=700
+
+# IBM Plex Mono - data/labels/timestamps. SIL Open Font License.
+[[theme.fontFaces]]
+family="IBMPlexMono"
+url="app/static/PlexMono-Regular.woff2"
+style="normal"
+weight=400
+
+[[theme.fontFaces]]
+family="IBMPlexMono"
+url="app/static/PlexMono-Medium.woff2"
+style="normal"
+weight=500
+
+[[theme.fontFaces]]
+family="IBMPlexMono"
+url="app/static/PlexMono-SemiBold.woff2"
+style="normal"
+weight=600

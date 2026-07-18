@@ -23,7 +23,12 @@ build-backend = "hatchling.build"
 packages = ["src/register", "src/jobs", "src/resume", "src/roadmap", "src/mcp_server"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+# "." (project root) lets views/*.py import sibling modules like
+# views.theme under AppTest - a real `streamlit run app.py` already has
+# root on sys.path from its own launch (inherited by every page pg.run()
+# execs in the same process), but AppTest.from_file() execs a view in
+# isolation with no such inheritance, so tests need it added explicitly.
+pythonpath = ["src", "."]
 
 [tool.uv]
 system-certs = true
