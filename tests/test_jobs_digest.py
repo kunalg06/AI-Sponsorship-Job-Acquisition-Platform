@@ -177,6 +177,51 @@ def test_list_recurring_portfolio_gaps_does_not_count_a_single_jobs_own_duplicat
         conn.close()
 
 
+def test_list_recurring_portfolio_gaps_excludes_a_gap_seen_only_on_discarded_jobs(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        for _ in range(2):
+            job_id = _job(conn)
+            update_tailoring(
+                conn, job_id, tailor_hash="h", evidence_notes=[], portfolio_gaps=["no Kubernetes experience"], page_risk_warning=None
+            )
+            mark_discarded(conn, job_id)
+
+        themes = list_recurring_portfolio_gaps(conn)
+
+        assert themes == []
+    finally:
+        conn.close()
+
+
+def test_list_recurring_portfolio_gaps_still_counts_an_applied_job_alongside_a_discarded_one(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        applied_job = _job(conn)
+        update_tailoring(
+            conn, applied_job, tailor_hash="h", evidence_notes=[], portfolio_gaps=["no Kubernetes experience"], page_risk_warning=None
+        )
+        mark_applied(conn, applied_job)
+
+        undecided_job = _job(conn)
+        update_tailoring(
+            conn, undecided_job, tailor_hash="h", evidence_notes=[], portfolio_gaps=["no Kubernetes experience"], page_risk_warning=None
+        )
+
+        discarded_job = _job(conn)
+        update_tailoring(
+            conn, discarded_job, tailor_hash="h", evidence_notes=[], portfolio_gaps=["no Kubernetes experience"], page_risk_warning=None
+        )
+        mark_discarded(conn, discarded_job)
+
+        themes = list_recurring_portfolio_gaps(conn)
+
+        assert [t.gap for t in themes] == ["no Kubernetes experience"]
+        assert themes[0].count == 2  # applied + undecided only, discarded excluded
+    finally:
+        conn.close()
+
+
 def test_compute_momentum_counts_only_applications_within_the_last_7_days(tmp_path):
     conn = connect(tmp_path / "jobs.db")
     try:

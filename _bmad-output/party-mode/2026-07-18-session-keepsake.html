@@ -1,0 +1,459 @@
+<title>Session Dossier — The Discard Question</title>
+<style>
+  :root {
+    --bg: #ece4d3;
+    --bg-grain-a: #e2d9c3;
+    --bg-grain-b: #f3ecdb;
+    --surface: #fbf7ee;
+    --surface-edge: #d9cdae;
+    --ink: #1f2430;
+    --ink-soft: #5b5a4e;
+    --ink-faint: #8a8571;
+    --navy: #1f3a5f;
+    --navy-soft: #3a557a;
+    --brass: #8a6a2f;
+    --stamp: #9c2b26;
+    --rule: #c9bfa6;
+    --focus: #1f3a5f;
+    --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --font-body: Georgia, "Iowan Old Style", "Times New Roman", serif;
+    --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, "Courier New", monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171d;
+      --bg-grain-a: #191d24;
+      --bg-grain-b: #0f1216;
+      --surface: #1c212a;
+      --surface-edge: #333c4a;
+      --ink: #e9e3d2;
+      --ink-soft: #b4ae9c;
+      --ink-faint: #7a7666;
+      --navy: #8fb3e0;
+      --navy-soft: #6f97c7;
+      --brass: #d4ac5c;
+      --stamp: #e2726c;
+      --rule: #3a4250;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14171d;
+    --bg-grain-a: #191d24;
+    --bg-grain-b: #0f1216;
+    --surface: #1c212a;
+    --surface-edge: #333c4a;
+    --ink: #e9e3d2;
+    --ink-soft: #b4ae9c;
+    --ink-faint: #7a7666;
+    --navy: #8fb3e0;
+    --navy-soft: #6f97c7;
+    --brass: #d4ac5c;
+    --stamp: #e2726c;
+    --rule: #3a4250;
+  }
+  :root[data-theme="light"] {
+    --bg: #ece4d3;
+    --bg-grain-a: #e2d9c3;
+    --bg-grain-b: #f3ecdb;
+    --surface: #fbf7ee;
+    --surface-edge: #d9cdae;
+    --ink: #1f2430;
+    --ink-soft: #5b5a4e;
+    --ink-faint: #8a8571;
+    --navy: #1f3a5f;
+    --navy-soft: #3a557a;
+    --brass: #8a6a2f;
+    --stamp: #9c2b26;
+    --rule: #c9bfa6;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+
+  body {
+    background:
+      radial-gradient(circle at 15% 20%, var(--bg-grain-a) 0%, transparent 45%),
+      radial-gradient(circle at 85% 70%, var(--bg-grain-b) 0%, transparent 50%),
+      var(--bg);
+    color: var(--ink);
+    font-family: var(--font-body);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: var(--navy); }
+  a:focus-visible, button:focus-visible, [tabindex]:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 3px;
+  }
+
+  .page {
+    max-width: 46rem;
+    margin: 0 auto;
+    padding: clamp(1.5rem, 5vw, 4rem) clamp(1.25rem, 5vw, 2rem) 5rem;
+  }
+
+  .cover {
+    position: relative;
+    border: 1px solid var(--surface-edge);
+    background: var(--surface);
+    padding: clamp(1.75rem, 5vw, 3rem);
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    box-shadow: 0 1px 0 var(--rule);
+  }
+
+  .cover-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .cover h1 {
+    font-family: var(--font-display);
+    font-weight: 400;
+    font-size: clamp(1.9rem, 5vw, 2.7rem);
+    margin: 0;
+    text-wrap: balance;
+    color: var(--ink);
+    letter-spacing: 0.005em;
+  }
+
+  .cover .subtitle {
+    font-style: italic;
+    color: var(--ink-soft);
+    font-size: 1.05rem;
+    max-width: 34rem;
+  }
+
+  .stamp {
+    position: absolute;
+    top: clamp(1rem, 4vw, 2.2rem);
+    right: clamp(1rem, 4vw, 2.2rem);
+    border: 3px solid var(--stamp);
+    color: var(--stamp);
+    font-family: var(--font-mono);
+    font-weight: 700;
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    padding: 0.4rem 0.6rem;
+    transform: rotate(-8deg);
+    border-radius: 3px;
+    opacity: 0.88;
+    animation: stamp-in 0.5s cubic-bezier(.2,.9,.3,1.2) both;
+    animation-delay: 0.15s;
+    white-space: nowrap;
+  }
+
+  @keyframes stamp-in {
+    from { opacity: 0; transform: rotate(-8deg) scale(1.6); }
+    to   { opacity: 0.88; transform: rotate(-8deg) scale(1); }
+  }
+
+  .cover-meta {
+    display: flex;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--ink-soft);
+    border-top: 1px dashed var(--rule);
+    padding-top: 0.9rem;
+    margin-top: 0.4rem;
+  }
+  .cover-meta strong { color: var(--ink); font-weight: 600; }
+
+  .section-label {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--brass);
+    margin: 3.2rem 0 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .section-label::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--rule);
+  }
+
+  .roster {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(13.5rem, 1fr));
+    gap: 0.9rem;
+  }
+  .badge {
+    background: var(--surface);
+    border: 1px solid var(--surface-edge);
+    padding: 0.9rem 1rem;
+    display: flex;
+    gap: 0.7rem;
+    align-items: flex-start;
+    opacity: 0;
+    transform: translateY(10px);
+    animation: rise 0.5s ease forwards;
+  }
+  .badge .icon { font-size: 1.3rem; line-height: 1; margin-top: 0.1rem; }
+  .badge .name {
+    font-family: var(--font-display);
+    font-size: 1.05rem;
+    color: var(--ink);
+  }
+  .badge .role {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--navy);
+    margin: 0.15rem 0 0.35rem;
+  }
+  .badge .note {
+    font-size: 0.86rem;
+    color: var(--ink-soft);
+    font-style: italic;
+  }
+
+  .exhibit {
+    background: var(--surface);
+    border: 1px solid var(--surface-edge);
+    border-left: 3px solid var(--navy);
+    padding: 1.3rem 1.5rem;
+    margin-bottom: 1.1rem;
+    opacity: 0;
+    transform: translateY(14px);
+    animation: rise 0.6s ease forwards;
+  }
+  .exhibit-tag {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    color: var(--brass);
+    text-transform: uppercase;
+  }
+  .exhibit h3 {
+    font-family: var(--font-display);
+    font-weight: 400;
+    font-size: 1.3rem;
+    margin: 0.25rem 0 0.7rem;
+    color: var(--ink);
+  }
+  .exhibit blockquote {
+    margin: 0 0 0.7rem;
+    padding-left: 0.9rem;
+    border-left: 2px solid var(--rule);
+    font-size: 0.98rem;
+    color: var(--ink);
+  }
+  .exhibit blockquote .who {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--navy-soft);
+    margin-bottom: 0.25rem;
+  }
+  .exhibit .why {
+    font-size: 0.86rem;
+    color: var(--ink-soft);
+    margin: 0;
+  }
+  .exhibit .why strong { color: var(--ink); font-weight: 600; }
+
+  .evidence-box {
+    background: var(--ink);
+    color: var(--bg);
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    padding: 0.9rem 1.1rem;
+    border-radius: 3px;
+    white-space: pre;
+    overflow-x: auto;
+    margin: 0 0 0.7rem;
+  }
+
+  .verdict {
+    background: var(--surface);
+    border: 1px solid var(--surface-edge);
+    padding: 1.6rem 1.7rem;
+    position: relative;
+  }
+  .verdict h3 {
+    font-family: var(--font-display);
+    font-size: 1.5rem;
+    font-weight: 400;
+    margin: 0 0 0.9rem;
+    color: var(--navy);
+  }
+  .verdict ul {
+    margin: 0;
+    padding-left: 1.1rem;
+  }
+  .verdict li { margin-bottom: 0.45rem; }
+  .verdict .approved {
+    position: absolute;
+    top: 1.4rem;
+    right: 1.6rem;
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    color: var(--stamp);
+    border: 2px solid var(--stamp);
+    padding: 0.25rem 0.5rem;
+    transform: rotate(6deg);
+    border-radius: 3px;
+  }
+  .verdict .shelved {
+    margin-top: 1rem;
+    padding-top: 0.9rem;
+    border-top: 1px dashed var(--rule);
+    font-size: 0.88rem;
+    color: var(--ink-soft);
+  }
+
+  .filed {
+    margin-top: 3rem;
+    padding-top: 1.2rem;
+    border-top: 1px dashed var(--rule);
+    font-family: var(--font-mono);
+    font-size: 0.76rem;
+    color: var(--ink-faint);
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+  }
+
+  @keyframes rise {
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .stamp, .badge, .exhibit { animation: none !important; opacity: 1 !important; transform: none !important; }
+  }
+
+  @media (max-width: 30rem) {
+    .stamp { position: static; margin-top: 0.5rem; display: inline-block; transform: rotate(-4deg); }
+    .cover { padding-top: 1.5rem; }
+  }
+</style>
+
+<div class="page">
+
+  <header class="cover">
+    <span class="stamp">Personal Use Only</span>
+    <div class="cover-eyebrow">
+      <span>Ref. SW&#8209;2026&#8209;0718</span>
+      <span>Filed 18 Jul 2026</span>
+    </div>
+    <h1>Session Dossier: The Discard Question</h1>
+    <p class="subtitle">A short, sharp sitting on one line of code — does a portfolio gap still count as "recurring" once every job that raised it has been discarded?</p>
+    <div class="cover-meta">
+      <span><strong>Subject:</strong> <code>jobs.digest.list_recurring_portfolio_gaps</code></span>
+      <span><strong>Present:</strong> 11 voices, 1 room</span>
+      <span><strong>Outcome:</strong> Simple exclusion, shipped</span>
+    </div>
+  </header>
+
+  <div class="section-label">Personnel present</div>
+  <div class="roster">
+    <div class="badge"><span class="icon">📋</span><div><div class="name">John</div><div class="role">Product Manager</div><div class="note">Opened with the itch, closed by reading the room back to itself.</div></div></div>
+    <div class="badge"><span class="icon">⚡</span><div><div class="name">Victor</div><div class="role">Innovation Strategist</div><div class="note">Named "trust" as the real stake before anyone else got there.</div></div></div>
+    <div class="badge"><span class="icon">🎨</span><div><div class="name">Sally</div><div class="role">UX Designer</div><div class="note">Argued to protect the signal, then updated on the evidence.</div></div></div>
+    <div class="badge"><span class="icon">🔬</span><div><div class="name">Dr.&nbsp;Quinn</div><div class="role">Problem Solver</div><div class="note">Found the real question hiding under the fake one.</div></div></div>
+    <div class="badge"><span class="icon">📊</span><div><div class="name">Mary</div><div class="role">Business Analyst</div><div class="note">"If it's zero, this whole argument is theater." It was zero.</div></div></div>
+    <div class="badge"><span class="icon">💻</span><div><div class="name">Amelia</div><div class="role">Senior Engineer</div><div class="note">Went and actually looked, live, against the real database.</div></div></div>
+    <div class="badge"><span class="icon">🏗️</span><div><div class="name">Winston</div><div class="role">System Architect</div><div class="note">Named the three shapes the fix could take before anyone picked one.</div></div></div>
+    <div class="badge"><span class="icon">🎬</span><div><div class="name">Caravaggio</div><div class="role">Presentation Expert</div><div class="note">Caught Winston repeating himself and said so.</div></div></div>
+    <div class="badge"><span class="icon">🧠</span><div><div class="name">Carson</div><div class="role">Brainstorming Specialist</div><div class="note">Pitched the dual-count. Shelved, not forgotten.</div></div></div>
+    <div class="badge"><span class="icon">🧪</span><div><div class="name">Murat</div><div class="role">Test Architect</div><div class="note">Asked what a summarizer-with-a-personality is even worth defending.</div></div></div>
+    <div class="badge"><span class="icon">📚</span><div><div class="name">Paige</div><div class="role">Technical Writer</div><div class="note">One line, landed: don't let the label rot into a tooltip.</div></div></div>
+  </div>
+
+  <div class="section-label">Session log</div>
+
+  <article class="exhibit">
+    <span class="exhibit-tag">Exhibit 1 — The Stakes</span>
+    <h3>"A yesterday-problem wearing a today-costume"</h3>
+    <blockquote><span class="who">Victor, Innovation Strategist</span>"A gap tied to three jobs you already passed on isn't a today-problem. Get that wrong once and Owner stops reading the digest at all."</blockquote>
+    <p class="why"><strong>Why it mattered:</strong> reframed a data-modeling question as a trust question before the room could get lost arguing schema.</p>
+  </article>
+
+  <article class="exhibit">
+    <span class="exhibit-tag">Exhibit 2 — The Objection</span>
+    <h3>"Discard" was never asked to mean anything</h3>
+    <blockquote><span class="who">Sally, UX Designer</span>"Discarded doesn't mean wrong role for you. You'd be discarding the signal because you discarded the job."</blockquote>
+    <p class="why"><strong>Why it mattered:</strong> the strongest case against a clean fix — until the data itself made the objection moot.</p>
+  </article>
+
+  <article class="exhibit">
+    <span class="exhibit-tag">Exhibit 3 — The Evidence</span>
+    <h3>One job. Zero themes. Either way.</h3>
+    <div class="evidence-box">Total jobs with tailor_portfolio_gaps: 1
+Current behavior (all jobs)      -&gt; 0 recurring themes
+Filtered (excluding discarded)   -&gt; 0 recurring themes
+Themes that would disappear      -&gt; 0</div>
+    <blockquote><span class="who">Amelia, Senior Engineer</span>"Ran it straight against data/jobs.db — read-only, no writes."</blockquote>
+    <p class="why"><strong>Why it mattered:</strong> Mary's challenge from three minutes earlier came true — the debate was theater today, which is exactly why the room chose to settle it cheap, now, before the data ever makes it expensive.</p>
+  </article>
+
+  <article class="exhibit">
+    <span class="exhibit-tag">Exhibit 4 — The Callback</span>
+    <h3>Cheap and load-bearing, again</h3>
+    <blockquote><span class="who">Caravaggio, Presentation Expert</span>"Don't pretend the discard reason is known when it isn't. Winston — isn't this just our line again?"</blockquote>
+    <p class="why"><strong>Why it mattered:</strong> the second sitting running this phrase has done real work — this time against Carson's fancier dual-count, not a CSS pass.</p>
+  </article>
+
+  <div class="section-label">Verdict</div>
+  <div class="verdict">
+    <span class="approved">Filed &amp; Shipped</span>
+    <h3>Exclude discarded jobs from the recurring-gap count</h3>
+    <ul>
+      <li><code>list_recurring_portfolio_gaps</code> only counts jobs whose <code>applied_status</code> isn't <code>"discarded"</code></li>
+      <li>A gap tied only to jobs you've moved past no longer surfaces as something to act on today</li>
+      <li>No new display distinction added — ship the simple version now, the data doesn't earn more yet</li>
+    </ul>
+    <p class="shelved"><strong>Shelved, not dead:</strong> Carson's "3 live, 1 discarded" dual-count display — revisit only if real usage ever makes the nuance worth the two extra code paths.</p>
+  </div>
+
+  <footer class="filed">
+    <span>Source: <em>_bmad-output/implementation-artifacts/spec-daily-coach-digest.md</em></span>
+    <span>Session memory: <em>_bmad-output/party-mode/memories/installed/</em></span>
+  </footer>
+
+</div>
+
+<script>
+  (function () {
+    var items = document.querySelectorAll('.badge, .exhibit');
+    if (!('IntersectionObserver' in window)) {
+      items.forEach(function (el) { el.style.opacity = 1; el.style.transform = 'none'; });
+      return;
+    }
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry, i) {
+        if (entry.isIntersecting) {
+          entry.target.style.animationDelay = (i % 6) * 0.06 + 's';
+          entry.target.style.animationPlayState = 'running';
+          io.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.15 });
+    items.forEach(function (el) {
+      el.style.animationPlayState = 'paused';
+      io.observe(el);
+    });
+  })();
+</script>

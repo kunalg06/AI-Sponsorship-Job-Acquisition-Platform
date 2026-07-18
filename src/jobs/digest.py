@@ -21,7 +21,7 @@ from typing import Optional
 
 from jobs.db import list_applied_jobs
 from jobs.outreach_db import ensure_schema as ensure_outreach_schema
-from jobs.tracker import days_since, due_milestone
+from jobs.tracker import DISCARDED, days_since, due_milestone
 
 
 @dataclass
@@ -128,8 +128,17 @@ def list_recurring_portfolio_gaps(conn: sqlite3.Connection, *, min_count: int = 
     phrasings in v1; revisit only if that proves too lossy in practice,
     matching this project's existing "start simple" convention). A gap
     appearing on only one job isn't a "theme" yet, so `min_count` defaults
-    to 2."""
-    rows = conn.execute("SELECT tailor_portfolio_gaps FROM jobs WHERE tailor_portfolio_gaps IS NOT NULL").fetchall()
+    to 2.
+
+    Discarded jobs are excluded from the count - a gap that only recurs
+    across jobs you've since moved past isn't something to act on today.
+    `applied_status IS NOT DISCARDED` (not `!=`) so undecided jobs
+    (`applied_status IS NULL`) are still counted - SQLite's `!=` against
+    NULL evaluates to NULL, which would silently drop them too."""
+    rows = conn.execute(
+        "SELECT tailor_portfolio_gaps FROM jobs WHERE tailor_portfolio_gaps IS NOT NULL AND applied_status IS NOT ?",
+        (DISCARDED,),
+    ).fetchall()
     counts: dict[str, int] = {}
     for row in rows:
         job_gaps = {gap.strip() for gap in json.loads(row["tailor_portfolio_gaps"]) if gap.strip()}
