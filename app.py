@@ -44,6 +44,22 @@ if "GENERATED_CV_DIR" not in os.environ:
     except Exception:
         pass
 
+# Same bridge again, for dbcompat.connect()'s Turso lookup (see
+# src/dbcompat/__init__.py) - each of the 4 domain databases (jobs,
+# sponsors, profile, roadmap) has its own optional URL/token pair. Both
+# vars have to be present for a given database to actually use Turso, so
+# there's no "not found" warning here either - a database missing either
+# one just falls back to local SQLite, which is the correct behavior for
+# local dev (no Turso secrets configured at all) rather than an error.
+for _prefix in ("JOBS", "SPONSORS", "PROFILE", "ROADMAP"):
+    for _suffix in ("URL", "TOKEN"):
+        _key = f"TURSO_{_prefix}_{_suffix}"
+        if _key not in os.environ:
+            try:
+                os.environ[_key] = st.secrets[_key]
+            except Exception:
+                pass
+
 st.set_page_config(page_title="Sponsorship Job Assistant", page_icon="\U0001f9ed", layout="centered")
 
 from views.theme import inject_base_css  # noqa: E402 (must follow set_page_config)

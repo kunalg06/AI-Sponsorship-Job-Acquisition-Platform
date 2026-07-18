@@ -1,6 +1,7 @@
 # Secrets
 .env
 .streamlit/secrets.toml
+turso.env
 
 # Local runtime state (SQLite DBs, personal data)
 data/*.db

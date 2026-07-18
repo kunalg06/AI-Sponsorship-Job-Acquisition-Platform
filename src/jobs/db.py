@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+import dbcompat
 from jobs.extract import JobExtraction
 
 BUSY_TIMEOUT_MS = 5000
@@ -85,8 +86,7 @@ def _ensure_columns(conn: sqlite3.Connection, table: str, schema_sql: str) -> No
 def connect(db_path: str | Path) -> sqlite3.Connection:
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
+    conn = dbcompat.connect(path, turso_env_prefix="JOBS")
     conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
     conn.executescript(SCHEMA)
     _ensure_columns(conn, "jobs", SCHEMA)

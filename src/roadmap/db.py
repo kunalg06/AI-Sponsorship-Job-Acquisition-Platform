@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import dbcompat
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS goal (
     id INTEGER PRIMARY KEY,
@@ -30,8 +32,7 @@ CREATE TABLE IF NOT EXISTS milestones (
 def connect(db_path: str | Path) -> sqlite3.Connection:
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
+    conn = dbcompat.connect(path, turso_env_prefix="ROADMAP")
     conn.executescript(SCHEMA)
     return conn
 

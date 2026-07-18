@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import dbcompat
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sponsors (
     id INTEGER PRIMARY KEY,
@@ -76,8 +78,7 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
     """Open (creating if needed) the sponsor register database."""
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
+    conn = dbcompat.connect(path, turso_env_prefix="SPONSORS")
     conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
     conn.executescript(SCHEMA)
     return conn

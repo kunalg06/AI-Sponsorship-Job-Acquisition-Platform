@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import dbcompat
 from resume.extract import ResumeProfile
 
 SCHEMA = """
@@ -39,8 +40,7 @@ CREATE TABLE IF NOT EXISTS narrative_core (
 def connect(db_path: str | Path) -> sqlite3.Connection:
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
+    conn = dbcompat.connect(path, turso_env_prefix="PROFILE")
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.executescript(SCHEMA)
     return conn

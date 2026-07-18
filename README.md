@@ -51,7 +51,22 @@ This opens the Streamlit UI: paste a job posting in, review the roadmap, or brow
 
 `packages.txt` (`libreoffice`) tells Cloud to apt-install LibreOffice, which `jobs.pdf_export` shells out to (headless) for the resume/cover-letter PDF download buttons — the same binary this project uses locally. Installing the full `libreoffice` package noticeably slows Cloud's first build/cold start; that's accepted as the cost of faithfully rendering the original `.docx` formatting rather than reinterpreting it through a lossier docx→HTML→PDF path.
 
-Local state (`data/*.db`, `cv/`) still needs addressing separately — see `_bmad-output/implementation-artifacts/deferred-work.md`.
+**Persistence (Turso):** Cloud's container filesystem is ephemeral — a redeploy, sleep/wake cycle, or routine recycle wipes anything written locally, including a plain SQLite file. `dbcompat.connect()` (`src/dbcompat/`) transparently swaps each of the 4 local databases (`sponsors`, `jobs`, `profile`, `roadmap`) for a [Turso](https://turso.tech)-backed `libsql` embedded replica instead, whenever both `TURSO_{NAME}_URL` and `TURSO_{NAME}_TOKEN` are set — otherwise it falls back to the exact same plain `sqlite3.connect()` this project always used, so local dev is completely unaffected unless you deliberately configure it. Turso is a hosted, wire-compatible fork of SQLite: queries and schema don't change, only where the durable copy of the file lives.
+
+To enable it on Cloud, create 4 databases in your [Turso dashboard](https://app.turso.tech) (or via the CLI), then add all 8 secrets under **Settings → Secrets**:
+
+```toml
+TURSO_SPONSORS_URL = "libsql://..."
+TURSO_SPONSORS_TOKEN = "..."
+TURSO_JOBS_URL = "libsql://..."
+TURSO_JOBS_TOKEN = "..."
+TURSO_PROFILE_URL = "libsql://..."
+TURSO_PROFILE_TOKEN = "..."
+TURSO_ROADMAP_URL = "libsql://..."
+TURSO_ROADMAP_TOKEN = "..."
+```
+
+Verified live end-to-end against real Turso databases (not just unit tests) for all 4 domains: connect, insert, read, and a genuinely fresh second embedded replica confirming the write actually reached the remote server, not just the local replica file. One real API gap found and fixed along the way: `libsql.Connection` has no `row_factory` concept at all (rows come back as bare tuples, unlike `sqlite3.Row`) — `dbcompat.Row`/the adapter classes exist purely to keep every existing `row["column"]` call site across all 4 domains and every view working unchanged.
 
 ## CLI tools
 
