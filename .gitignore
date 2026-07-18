@@ -19,3 +19,6 @@ __pycache__/
 
 # uv
 # (uv.lock is intentionally NOT ignored - it's committed for reproducible installs)
+.bmad-loop/runs/
+.bmad-loop/cache/
+.bmad-loop/policy.toml
