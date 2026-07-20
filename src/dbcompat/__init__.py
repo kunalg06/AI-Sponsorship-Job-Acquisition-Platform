@@ -161,6 +161,13 @@ class _ConnectionAdapter:
         return result
 
 
+_MISSING_REPLICA_METADATA_MARKER = "db file exists but metadata file does not"
+
+
+def _is_missing_replica_metadata_error(exc: BaseException) -> bool:
+    return isinstance(exc, ValueError) and _MISSING_REPLICA_METADATA_MARKER in str(exc)
+
+
 def connect(db_path: str | Path, *, turso_env_prefix: str) -> Any:
     """Open a connection to `db_path`. If `TURSO_{turso_env_prefix}_URL`
     and `TURSO_{turso_env_prefix}_TOKEN` are both set in the environment,
@@ -175,13 +182,33 @@ def connect(db_path: str | Path, *, turso_env_prefix: str) -> Any:
     unchanged local-dev behavior, and the caller's `Path.mkdir` /
     `PRAGMA`/`executescript` schema setup works identically either way
     since both branches expose the same `execute`/`executescript`/
-    `commit`/context-manager surface."""
+    `commit`/context-manager surface.
+
+    One case this module's original design didn't anticipate (see the
+    module docstring's "no Turso env vars set locally" assumption): a
+    `db_path` created by plain `sqlite3` *before* Turso was wired in for
+    this database - e.g. local dev that predates this migration, using the
+    same `.streamlit/secrets.toml` for both local runs and the Cloud
+    deploy. `libsql.connect()` refuses to open that file at all (confirmed
+    live: `ValueError: sync error: invalid local state: db file exists but
+    metadata file does not`), since it was never one of its own replicas.
+    Turso is the durable source of truth once these env vars exist, so
+    that legacy file has nothing libsql needs - it's quarantined alongside
+    itself (never deleted) and a fresh replica is initialized in its place,
+    synced from the remote."""
     url = os.environ.get(f"TURSO_{turso_env_prefix}_URL")
     token = os.environ.get(f"TURSO_{turso_env_prefix}_TOKEN")
     if url and token:
         import libsql
 
-        conn = libsql.connect(str(db_path), sync_url=url, auth_token=token)
+        try:
+            conn = libsql.connect(str(db_path), sync_url=url, auth_token=token)
+        except ValueError as exc:
+            if not _is_missing_replica_metadata_error(exc):
+                raise
+            quarantine_path = Path(f"{db_path}.pre-turso-backup")
+            Path(db_path).replace(quarantine_path)
+            conn = libsql.connect(str(db_path), sync_url=url, auth_token=token)
         conn.sync()
         return _ConnectionAdapter(conn)
 

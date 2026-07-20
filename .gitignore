@@ -5,6 +5,13 @@ turso.env
 
 # Local runtime state (SQLite DBs, personal data)
 data/*.db
+# libsql embedded-replica sidecars (dbcompat.connect's Turso path) and the
+# quarantined pre-Turso file it backs up before replacing - same personal
+# data as data/*.db above, just under different filenames.
+data/*.db-info
+data/*.db-shm
+data/*.db-wal
+data/*.pre-turso-backup
 data/tailored/
 
 # Personal resume/CV content and generated per-company tailored output
