@@ -2,10 +2,14 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
-from google.genai import errors as genai_errors
+from google.genai import errors as public_genai_errors  # the OLD/unrelated hierarchy - see below
+from google.genai._gaos import errors as gaos_response_errors
+from google.genai._gaos.lib import compat_errors as genai_errors
 
 from jobs.tailor import MAX_OUTPUT_TOKENS, MODEL, TailoredApplication, compute_tailor_hash, generate_tailored_application
 from resume.github_evidence import RepoEvidence
+
+_FAKE_REQUEST = httpx.Request("POST", "https://example.com")
 
 
 def test_compute_tailor_hash_is_deterministic_and_sensitive_to_either_input():
@@ -80,13 +84,43 @@ def test_generate_tailored_application_handles_no_repo_evidence():
 
 def test_generate_tailored_application_raises_system_exit_on_api_error():
     fake_client = MagicMock()
-    original = genai_errors.APIError(500, {"message": "Internal error", "status": "INTERNAL"})
+    response = httpx.Response(500, request=_FAKE_REQUEST)
+    original = genai_errors.APIStatusError("Internal error", response=response, body=None)
     fake_client.interactions.create.side_effect = original
 
     with pytest.raises(SystemExit, match="Tailoring generation failed") as exc_info:
         generate_tailored_application("job text", "Acme", "resume text", [], client=fake_client)
     assert "Internal error" in str(exc_info.value)
     assert exc_info.value.__cause__ is original
+
+
+def test_generate_tailored_application_raises_system_exit_on_connection_error():
+    # Reproduces the real failure that exposed this whole hierarchy mismatch:
+    # a live TLS/connect failure raised google.genai._gaos.lib.compat_errors
+    # .APIConnectionError, which the old `except genai_errors.APIError`
+    # (google.genai.errors - an unrelated, same-named class) did not catch -
+    # it crashed the Streamlit page uncaught instead of becoming a SystemExit.
+    fake_client = MagicMock()
+    original = genai_errors.APIConnectionError(message="Connection refused", request=_FAKE_REQUEST)
+    fake_client.interactions.create.side_effect = original
+
+    with pytest.raises(SystemExit, match="Tailoring generation failed") as exc_info:
+        generate_tailored_application("job text", "Acme", "resume text", [], client=fake_client)
+    assert "Connection refused" in str(exc_info.value)
+    assert exc_info.value.__cause__ is original
+
+
+def test_generate_tailored_application_does_not_catch_the_unrelated_public_errors_hierarchy():
+    # google.genai.errors.APIError looks identical by name but is a
+    # completely different class from the one interactions.create() actually
+    # raises (google.genai._gaos.lib.compat_errors.APIError) - if a future
+    # edit reverts the import back to the wrong module, this must fail.
+    fake_client = MagicMock()
+    original = public_genai_errors.APIError(500, {"message": "Internal error", "status": "INTERNAL"})
+    fake_client.interactions.create.side_effect = original
+
+    with pytest.raises(type(original)):
+        generate_tailored_application("job text", "Acme", "resume text", [], client=fake_client)
 
 
 def test_generate_tailored_application_raises_system_exit_on_network_error():
@@ -114,12 +148,16 @@ def test_generate_tailored_application_raises_system_exit_on_missing_credentials
     assert exc_info.value.__cause__ is original
 
 
-def test_generate_tailored_application_raises_system_exit_on_unknown_api_response():
-    # A 200 response with a non-JSON body raises `UnknownApiResponseError`, a
-    # `ValueError` subclass, not an `APIError` subclass - a distinct SDK failure
-    # mode from both the API-error and network-error paths above.
+def test_generate_tailored_application_raises_system_exit_on_response_validation_error():
+    # A 200 response the SDK can't unmarshal into its expected shape raises
+    # `ResponseValidationError` - a distinct hierarchy from
+    # GeminiNextGenAPIClientError (neither is a subclass of the other, per
+    # each class's own __mro__), so it needs its own except arm.
     fake_client = MagicMock()
-    original = genai_errors.UnknownApiResponseError("Failed to parse response as JSON.")
+    response = httpx.Response(200, request=_FAKE_REQUEST)
+    original = gaos_response_errors.ResponseValidationError(
+        "Failed to parse response as JSON.", response, ValueError("not JSON")
+    )
     fake_client.interactions.create.side_effect = original
 
     with pytest.raises(SystemExit, match="Tailoring generation failed") as exc_info:

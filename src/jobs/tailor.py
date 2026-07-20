@@ -14,7 +14,20 @@ from typing import NoReturn, Optional
 
 import httpx
 from google import genai
-from google.genai import errors as genai_errors
+
+# `google.genai.errors` (the public re-export) covers the older
+# `generate_content`-style client - confirmed live it does NOT cover
+# `client.interactions.create()` (the "_gaos"/Interactions API this file
+# actually calls): a real APIConnectionError from a TLS failure propagated
+# straight through the `except genai_errors.APIError` below uncaught, since
+# that's a same-named but unrelated class. interactions.create()'s real
+# exceptions live in two separate hierarchies (verified via each class's
+# __mro__, neither is a subclass of the other): `_gaos.lib.compat_errors`
+# for connection/auth/rate-limit/status failures (GeminiNextGenAPIClientError
+# is the common base), and `_gaos.errors` for a response the SDK received
+# but couldn't unmarshal into the expected shape (ResponseValidationError).
+from google.genai._gaos import errors as gaos_response_errors
+from google.genai._gaos.lib import compat_errors as genai_errors
 from pydantic import BaseModel, ValidationError
 
 from resume.github_evidence import RepoEvidence
@@ -25,9 +38,11 @@ MODEL = "gemini-3.5-flash"
 # caps a runaway/repetition-loop generation (observed in practice: a 750k+
 # character single field) so it fails fast on a bounded response instead of
 # streaming out an unbounded one that then fails JSON parsing anyway.
-# presence_penalty discourages the repetition that causes that loop.
+# presence_penalty would additionally discourage the repetition that causes
+# that loop, but the live API rejects it for this model - confirmed live:
+# "Unknown parameter 'presence_penalty' at 'generation_config'" (400) - even
+# though the SDK's local GenerationConfigParam stub declares it as valid.
 MAX_OUTPUT_TOKENS = 8192
-PRESENCE_PENALTY = 0.4
 
 _SYSTEM_INSTRUCTION = (
     "You tailor a candidate's resume and write a cover letter for a specific "
@@ -117,7 +132,7 @@ def generate_tailored_application(
                     "mime_type": "application/json",
                     "schema": TailoredApplication.model_json_schema(),
                 },
-                generation_config={"max_output_tokens": MAX_OUTPUT_TOKENS, "presence_penalty": PRESENCE_PENALTY},
+                generation_config={"max_output_tokens": MAX_OUTPUT_TOKENS},
             )
             return TailoredApplication.model_validate_json(interaction.output_text)
         except ValidationError as exc:
@@ -128,8 +143,8 @@ def generate_tailored_application(
             validation_error = exc
             continue
         except (
-            genai_errors.APIError,
-            genai_errors.UnknownApiResponseError,
+            genai_errors.GeminiNextGenAPIClientError,
+            gaos_response_errors.ResponseValidationError,
             httpx.HTTPError,
             RuntimeError,  # covers the SDK's bare RuntimeError when no API credentials resolve
         ) as exc:

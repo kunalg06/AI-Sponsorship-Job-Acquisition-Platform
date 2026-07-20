@@ -3,7 +3,9 @@ from unittest.mock import MagicMock
 import docx
 import httpx
 import pytest
-from google.genai import errors as genai_errors
+from google.genai import errors as public_genai_errors  # the OLD/unrelated hierarchy - see below
+from google.genai._gaos import errors as gaos_response_errors
+from google.genai._gaos.lib import compat_errors as genai_errors
 
 import jobs.docx_tailor as docx_tailor_module
 from jobs.docx_tailor import (
@@ -110,7 +112,8 @@ def test_generate_paragraph_edits_filters_to_rewrite_only():
 
 def test_generate_paragraph_edits_raises_system_exit_on_api_error():
     fake_client = MagicMock()
-    original = genai_errors.APIError(500, {"message": "Internal error", "status": "INTERNAL"})
+    response = httpx.Response(500, request=httpx.Request("POST", "https://example.com"))
+    original = genai_errors.APIStatusError("Internal error", response=response, body=None)
     fake_client.interactions.create.side_effect = original
     paragraphs = [SourceParagraph(index=0, text="JANE DOE")]
 
@@ -118,6 +121,35 @@ def test_generate_paragraph_edits_raises_system_exit_on_api_error():
         generate_paragraph_edits(paragraphs, "job text", "Acme Corp", client=fake_client)
     assert "Internal error" in str(exc_info.value)
     assert exc_info.value.__cause__ is original
+
+
+def test_generate_paragraph_edits_raises_system_exit_on_connection_error():
+    # Reproduces the real failure that exposed this whole hierarchy mismatch
+    # (see jobs.tailor's identical test for the full story): a live TLS/
+    # connect failure raises compat_errors.APIConnectionError, which the old
+    # `except genai_errors.APIError` (google.genai.errors - an unrelated,
+    # same-named class) did not catch.
+    fake_client = MagicMock()
+    original = genai_errors.APIConnectionError(
+        message="Connection refused", request=httpx.Request("POST", "https://example.com")
+    )
+    fake_client.interactions.create.side_effect = original
+    paragraphs = [SourceParagraph(index=0, text="JANE DOE")]
+
+    with pytest.raises(SystemExit, match="Resume paragraph tailoring failed") as exc_info:
+        generate_paragraph_edits(paragraphs, "job text", "Acme Corp", client=fake_client)
+    assert "Connection refused" in str(exc_info.value)
+    assert exc_info.value.__cause__ is original
+
+
+def test_generate_paragraph_edits_does_not_catch_the_unrelated_public_errors_hierarchy():
+    fake_client = MagicMock()
+    original = public_genai_errors.APIError(500, {"message": "Internal error", "status": "INTERNAL"})
+    fake_client.interactions.create.side_effect = original
+    paragraphs = [SourceParagraph(index=0, text="JANE DOE")]
+
+    with pytest.raises(type(original)):
+        generate_paragraph_edits(paragraphs, "job text", "Acme Corp", client=fake_client)
 
 
 def test_generate_paragraph_edits_raises_system_exit_on_network_error():
@@ -144,9 +176,12 @@ def test_generate_paragraph_edits_raises_system_exit_on_missing_credentials():
     assert exc_info.value.__cause__ is original
 
 
-def test_generate_paragraph_edits_raises_system_exit_on_unknown_api_response():
+def test_generate_paragraph_edits_raises_system_exit_on_response_validation_error():
     fake_client = MagicMock()
-    original = genai_errors.UnknownApiResponseError("Failed to parse response as JSON.")
+    response = httpx.Response(200, request=httpx.Request("POST", "https://example.com"))
+    original = gaos_response_errors.ResponseValidationError(
+        "Failed to parse response as JSON.", response, ValueError("not JSON")
+    )
     fake_client.interactions.create.side_effect = original
     paragraphs = [SourceParagraph(index=0, text="JANE DOE")]
 

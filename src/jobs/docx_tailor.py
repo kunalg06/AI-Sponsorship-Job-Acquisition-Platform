@@ -35,7 +35,14 @@ from typing import Literal, Optional
 import docx
 import httpx
 from google import genai
-from google.genai import errors as genai_errors
+
+# See jobs.tailor's identical import for why: google.genai.errors (the
+# public re-export) doesn't cover client.interactions.create()'s real
+# exceptions - those live in _gaos.lib.compat_errors (connection/auth/
+# rate-limit/status) and _gaos.errors (a response the SDK couldn't
+# unmarshal), two separate hierarchies neither a subclass of the other.
+from google.genai._gaos import errors as gaos_response_errors
+from google.genai._gaos.lib import compat_errors as genai_errors
 from pydantic import BaseModel, ValidationError
 
 from jobs.atomic_fs import _fsync_directory
@@ -165,8 +172,8 @@ def generate_paragraph_edits(
         result = TailoredResumeEdits.model_validate_json(interaction.output_text)
         return {edit.index: edit.text for edit in result.edits if edit.action == "rewrite" and edit.text}
     except (
-        genai_errors.APIError,
-        genai_errors.UnknownApiResponseError,
+        genai_errors.GeminiNextGenAPIClientError,
+        gaos_response_errors.ResponseValidationError,
         httpx.HTTPError,
         ValidationError,
         RuntimeError,  # covers the SDK's bare RuntimeError when no API credentials resolve
