@@ -4,7 +4,7 @@ import httpx
 import pytest
 from google.genai import errors as genai_errors
 
-from jobs.tailor import MODEL, TailoredApplication, compute_tailor_hash, generate_tailored_application
+from jobs.tailor import MAX_OUTPUT_TOKENS, MODEL, TailoredApplication, compute_tailor_hash, generate_tailored_application
 from resume.github_evidence import RepoEvidence
 
 
@@ -126,6 +126,53 @@ def test_generate_tailored_application_raises_system_exit_on_unknown_api_respons
         generate_tailored_application("job text", "Acme", "resume text", [], client=fake_client)
     assert "Failed to parse response as JSON" in str(exc_info.value)
     assert exc_info.value.__cause__ is original
+
+
+def test_generate_tailored_application_sends_a_bounded_generation_config():
+    # Reproduces the real failure this guards against: a Gemini response that
+    # ran away into a repetition loop (observed live at 750k+ characters in a
+    # single field) until it hit the token cap mid-object, so the JSON never
+    # closed and pydantic parsing blew up. Bounding the response is the fix,
+    # not just catching the resulting ValidationError.
+    expected = TailoredApplication(
+        tailored_resume="TAILORED RESUME TEXT", cover_letter="COVER LETTER TEXT", evidence_notes=[], portfolio_gaps=[]
+    )
+    fake_client = MagicMock()
+    fake_client.interactions.create.return_value = MagicMock(output_text=expected.model_dump_json())
+
+    generate_tailored_application("job text", "Acme", "resume text", [], client=fake_client)
+
+    _, kwargs = fake_client.interactions.create.call_args
+    assert kwargs["generation_config"]["max_output_tokens"] == MAX_OUTPUT_TOKENS
+
+
+def test_generate_tailored_application_retries_once_on_malformed_response_and_succeeds():
+    expected = TailoredApplication(
+        tailored_resume="TAILORED RESUME TEXT", cover_letter="COVER LETTER TEXT", evidence_notes=[], portfolio_gaps=[]
+    )
+    fake_client = MagicMock()
+    fake_client.interactions.create.side_effect = [
+        MagicMock(output_text='{"tailored_resume": "cut off mid-obj'),  # truncated, invalid JSON
+        MagicMock(output_text=expected.model_dump_json()),
+    ]
+
+    result = generate_tailored_application("job text", "Acme", "resume text", [], client=fake_client)
+
+    assert result == expected
+    assert fake_client.interactions.create.call_count == 2
+
+
+def test_generate_tailored_application_gives_up_after_a_second_malformed_response():
+    fake_client = MagicMock()
+    fake_client.interactions.create.return_value = MagicMock(output_text="{}")
+
+    with pytest.raises(SystemExit, match="Tailoring generation failed") as exc_info:
+        generate_tailored_application("job text", "Acme", "resume text", [], client=fake_client)
+
+    assert "tailored_resume" in str(exc_info.value)
+    # Exactly one retry - not zero (would defeat the point) and not an
+    # unbounded loop (would hang/burn quota on a persistent failure mode).
+    assert fake_client.interactions.create.call_count == 2
 
 
 def test_generate_tailored_application_raises_system_exit_on_malformed_response():

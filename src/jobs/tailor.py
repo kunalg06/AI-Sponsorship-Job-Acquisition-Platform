@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import sys
 import traceback
-from typing import Optional
+from typing import NoReturn, Optional
 
 import httpx
 from google import genai
@@ -20,6 +20,14 @@ from pydantic import BaseModel, ValidationError
 from resume.github_evidence import RepoEvidence
 
 MODEL = "gemini-3.5-flash"
+
+# A tailored resume + cover letter is at most a couple thousand words: this
+# caps a runaway/repetition-loop generation (observed in practice: a 750k+
+# character single field) so it fails fast on a bounded response instead of
+# streaming out an unbounded one that then fails JSON parsing anyway.
+# presence_penalty discourages the repetition that causes that loop.
+MAX_OUTPUT_TOKENS = 8192
+PRESENCE_PENALTY = 0.4
 
 _SYSTEM_INSTRUCTION = (
     "You tailor a candidate's resume and write a cover letter for a specific "
@@ -74,6 +82,20 @@ def _build_input(
     )
 
 
+def _raise_tailoring_failure(exc: Exception) -> NoReturn:
+    detail = str(exc).strip() or type(exc).__name__
+    # Server-side diagnostic only: the Streamlit UI only ever sees `detail`
+    # above via SystemExit, so the full original traceback would otherwise
+    # be lost. Formats `exc` explicitly (not `traceback.print_exc()`'s ambient
+    # sys.exc_info()) since the retry loop's final call happens after the
+    # except block that caught it has already exited.
+    try:
+        traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
+    except Exception:
+        pass
+    raise SystemExit(f"Tailoring generation failed: {detail}") from exc
+
+
 def generate_tailored_application(
     job_raw_text: str,
     company_name: Optional[str],
@@ -83,32 +105,34 @@ def generate_tailored_application(
     client: Optional[genai.Client] = None,
 ) -> TailoredApplication:
     client = client or genai.Client()
-    try:
-        interaction = client.interactions.create(
-            model=MODEL,
-            system_instruction=_SYSTEM_INSTRUCTION,
-            input=_build_input(job_raw_text, company_name, raw_resume_text, repos),
-            response_format={
-                "type": "text",
-                "mime_type": "application/json",
-                "schema": TailoredApplication.model_json_schema(),
-            },
-        )
-        return TailoredApplication.model_validate_json(interaction.output_text)
-    except (
-        genai_errors.APIError,
-        genai_errors.UnknownApiResponseError,
-        httpx.HTTPError,
-        ValidationError,
-        RuntimeError,  # covers the SDK's bare RuntimeError when no API credentials resolve
-    ) as exc:
-        detail = str(exc).strip() or type(exc).__name__
-        # Server-side diagnostic only: the Streamlit UI only ever sees `detail`
-        # above via SystemExit, so the full original traceback would otherwise
-        # be lost. Never let this diagnostic itself break the SystemExit
-        # contract callers rely on.
+    validation_error: Optional[ValidationError] = None
+    for attempt in range(2):
         try:
-            traceback.print_exc(file=sys.stderr)
-        except Exception:
-            pass
-        raise SystemExit(f"Tailoring generation failed: {detail}") from exc
+            interaction = client.interactions.create(
+                model=MODEL,
+                system_instruction=_SYSTEM_INSTRUCTION,
+                input=_build_input(job_raw_text, company_name, raw_resume_text, repos),
+                response_format={
+                    "type": "text",
+                    "mime_type": "application/json",
+                    "schema": TailoredApplication.model_json_schema(),
+                },
+                generation_config={"max_output_tokens": MAX_OUTPUT_TOKENS, "presence_penalty": PRESENCE_PENALTY},
+            )
+            return TailoredApplication.model_validate_json(interaction.output_text)
+        except ValidationError as exc:
+            # A malformed/truncated JSON response (e.g. a repetition loop
+            # that runs out the token cap mid-object) is usually a one-off
+            # degenerate generation, not a systemic failure - worth one
+            # retry before giving up.
+            validation_error = exc
+            continue
+        except (
+            genai_errors.APIError,
+            genai_errors.UnknownApiResponseError,
+            httpx.HTTPError,
+            RuntimeError,  # covers the SDK's bare RuntimeError when no API credentials resolve
+        ) as exc:
+            _raise_tailoring_failure(exc)
+
+    _raise_tailoring_failure(validation_error)
