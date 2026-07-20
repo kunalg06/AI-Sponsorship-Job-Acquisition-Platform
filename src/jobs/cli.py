@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+import truststore
 from dotenv import load_dotenv
 
 from jobs.atomic_fs import _fsync_directory
@@ -69,6 +70,12 @@ from resume.db import get_latest_narrative, get_latest_profile, get_latest_raw_r
 from resume.github_evidence import extract_github_username, fetch_public_repos
 
 load_dotenv()
+
+# See app.py's identical call for why: httpx (the Gemini SDK's transport)
+# verifies TLS against certifi's bundled CAs, which this machine's trust
+# anchor isn't in - the CLI is a separate process entrypoint from app.py,
+# so it needs its own call, same as it needs its own load_dotenv() above.
+truststore.inject_into_ssl()
 
 DEFAULT_DB = "data/jobs.db"
 DEFAULT_SPONSOR_DB = "data/sponsors.db"

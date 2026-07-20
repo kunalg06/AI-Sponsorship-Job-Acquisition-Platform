@@ -9,9 +9,23 @@ import os
 import sys
 
 import streamlit as st
+import truststore
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# httpx (used by the Gemini SDK for every LLM call) verifies TLS against
+# certifi's bundled CAs by default - on a machine whose trust anchor isn't in
+# that bundle (confirmed live: CERTIFICATE_VERIFY_FAILED against any HTTPS
+# host, not just Gemini's), every LLM call fails before reaching the API at
+# all. The OS trust store already has what's needed - it's the same gap
+# [tool.uv]'s system-certs = true works around for package installs, just
+# for this process's own outbound calls instead. inject_into_ssl() patches
+# ssl.SSLContext process-wide, so this one call covers every httpx client
+# built anywhere downstream (jobs.tailor, jobs.extract, jobs.match_score,
+# jobs.docx_tailor, jobs.outreach, resume.extract), not just this file's own
+# requests.
+truststore.inject_into_ssl()
 
 # On Streamlit Community Cloud there is no .env file, so load_dotenv() above
 # is a no-op - secrets are delivered via st.secrets instead. Bridge it into

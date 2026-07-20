@@ -11,6 +11,7 @@ dependencies = [
     "streamlit>=1.48",  # st.dialog's on_dismiss (views/admin.py) needs 1.48+
     "mcp>=1.28.1",
     "libsql>=0.1.11",  # Turso-backed persistence - see .python-version: no Windows wheel above cp313 yet
+    "truststore",  # httpx/certifi's bundled CAs miss this machine's trust anchor - same root cause [tool.uv] system-certs already works around for package installs (see app.py/jobs/cli.py's inject_into_ssl() call)
 ]
 
 [project.optional-dependencies]
