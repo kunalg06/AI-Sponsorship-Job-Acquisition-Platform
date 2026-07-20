@@ -60,7 +60,7 @@ from jobs.outreach_db import (
     mark_outreach_write_failed,
 )
 from jobs.salary_check import MEETS_THRESHOLD, check_salary_threshold
-from jobs.sponsor_check import CONFIRMED, FUZZY_MATCH, USER_CONFIRMED, check_sponsor_status
+from jobs.sponsor_check import CONFIRMED, FUZZY_MATCH, REMOTE_ANYWHERE_SKIP_REASON, SKIPPED, USER_CONFIRMED, check_sponsor_status
 from jobs.tailor import compute_tailor_hash, generate_tailored_application
 from jobs.tracker import due_milestone, days_since
 from register.db import connect as connect_register
@@ -1132,6 +1132,37 @@ def _cmd_confirm_sponsor(args: argparse.Namespace) -> None:
         conn.close()
 
 
+def _cmd_skip_sponsor_check(args: argparse.Namespace) -> None:
+    """Retrofit an already-stored job as remote-from-anywhere, skipping the
+    sponsor register check - the CLI counterpart of the intake page's remote
+    checkbox, for jobs pasted before this flag existed."""
+    conn = connect(args.db)
+    try:
+        job = get_job(conn, args.job_id)
+        if job is None:
+            raise SystemExit(f"No job #{args.job_id} found in {args.db}")
+
+        if args.undo:
+            update_sponsor_verdict(
+                conn, args.job_id, status=None, reason=None, matched_name=None, rating=None, route=None
+            )
+            print(f"Job #{args.job_id}: sponsor-check skip cleared - re-run `sponsor-check` to resolve it normally.")
+            return
+
+        update_sponsor_verdict(
+            conn,
+            args.job_id,
+            status=SKIPPED,
+            reason=REMOTE_ANYWHERE_SKIP_REASON,
+            matched_name=job["company_name"],
+            rating=None,
+            route=None,
+        )
+        print(f"Job #{args.job_id}: sponsor check skipped (remote-from-anywhere).")
+    finally:
+        conn.close()
+
+
 def _cmd_list(args: argparse.Namespace) -> None:
     conn = connect(args.db)
     try:
@@ -1183,6 +1214,17 @@ def build_parser() -> argparse.ArgumentParser:
     confirm_sponsor_parser.add_argument("--source", help="How you verified it, e.g. 'browser extension' - stored in the reason")
     confirm_sponsor_parser.add_argument("--db", default=DEFAULT_DB, help="Jobs SQLite db path")
     confirm_sponsor_parser.set_defaults(func=_cmd_confirm_sponsor)
+
+    skip_sponsor_check_parser = subparsers.add_parser(
+        "skip-sponsor-check",
+        help="Mark a stored job remote-from-anywhere, skipping the sponsor register check (or --undo to clear it)",
+    )
+    skip_sponsor_check_parser.add_argument("job_id", type=int)
+    skip_sponsor_check_parser.add_argument(
+        "--undo", action="store_true", help="Clear a previous skip so `sponsor-check` can resolve it normally again"
+    )
+    skip_sponsor_check_parser.add_argument("--db", default=DEFAULT_DB, help="Jobs SQLite db path")
+    skip_sponsor_check_parser.set_defaults(func=_cmd_skip_sponsor_check)
 
     salary_check_parser = subparsers.add_parser("salary-check", help="Re-run the salary threshold check for a stored job")
     salary_check_parser.add_argument("job_id", type=int)

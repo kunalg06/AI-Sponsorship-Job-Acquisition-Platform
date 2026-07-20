@@ -32,6 +32,17 @@ NOT_FOUND = "not_found"
 CANNOT_VERIFY = "cannot_verify"
 USER_CONFIRMED = "user_confirmed"
 USER_FLAGGED = "user_flagged"
+SKIPPED = "skipped"
+
+# Shared wording so the intake UI and the CLI retrofit command can't drift
+# into two different claims about what "skipped" means. Deliberately narrow:
+# a UK-based remote role still needs standard sponsorship, so this only
+# covers work-from-anywhere postings with no UK right-to-work requirement.
+REMOTE_ANYWHERE_SKIP_REASON = (
+    "Self-declared as remote-from-anywhere, with no UK work authorization required - "
+    "sponsor register check skipped. Does not apply to UK-based remote roles, which "
+    "still need standard sponsorship."
+)
 
 MAX_FUZZY_CANDIDATES = 10
 

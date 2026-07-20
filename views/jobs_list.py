@@ -19,7 +19,7 @@ from jobs.outreach import EMAIL, LINKEDIN_NOTE, OutreachLengthError
 from jobs.outreach_db import ensure_schema as ensure_outreach_schema
 from jobs.outreach_db import insert_contact, list_contacts, list_outreach_messages
 from jobs.pdf_export import PdfConversionError, convert_docx_to_pdf
-from jobs.sponsor_check import CANNOT_VERIFY, CONFIRMED, FUZZY_MATCH, NOT_FOUND, USER_CONFIRMED, USER_FLAGGED
+from jobs.sponsor_check import CANNOT_VERIFY, CONFIRMED, FUZZY_MATCH, NOT_FOUND, SKIPPED, USER_CONFIRMED, USER_FLAGGED
 from jobs.tracker import APPLIED, DISCARDED, days_since, due_milestone
 from jobs.ui_actions import draft_and_save_outreach, error_display_text, generate_tailored_docx_for_job
 from views.theme import set_page_wonk
@@ -36,6 +36,7 @@ STATUS_COLOR = {
     USER_FLAGGED: "red",
     NOT_FOUND: "red",
     CANNOT_VERIFY: "gray",
+    SKIPPED: "blue",
 }
 
 CHANNEL_LABELS = {
