@@ -111,3 +111,49 @@ def test_jobs_list_page_shows_error_display_text_for_empty_message_exception(str
     assert mock_tailor.call_args.kwargs["force"] is False
     assert len(at.error) == 1
     assert "SystemExit" in at.error[0].value
+
+
+def test_intake_page_extract_button_shows_error_display_text_on_extraction_failure(streamlit_data_env, monkeypatch):
+    # extract_job/score_job_match/extract_profile had NO error handling at
+    # all until this fix (unlike the three SystemExit-raising call sites
+    # above) - a real API failure crashed the whole page uncaught. This
+    # covers the "Extract & Check Sponsor" button, the first of the two
+    # newly-wrapped call sites in this file.
+    monkeypatch.setattr("jobs.extract.extract_job", MagicMock(side_effect=SystemExit("Job extraction failed: boom")))
+
+    at = AppTest.from_file(INTAKE_PY)
+    at.run()
+    at.text_area(key="raw_text_input").input(RAW_JOB_TEXT).run()
+
+    extract_button = next(b for b in at.button if b.label == "Extract & Check Sponsor")
+    extract_button.click().run()
+
+    assert len(at.error) == 1
+    assert "Job extraction failed: boom" in at.error[0].value
+    # A failed extraction must not silently carry over a stale raw_text into
+    # session state as if it had succeeded.
+    assert "raw_text" not in at.session_state
+    assert "extraction" not in at.session_state or at.session_state["extraction"] is None
+
+
+def test_admin_page_extract_register_button_shows_error_display_text_on_extraction_failure(
+    streamlit_data_env, monkeypatch
+):
+    # The second newly-wrapped call site: extract_profile's caller used
+    # `except Exception`, which does NOT catch SystemExit (not an Exception
+    # subclass) - without widening it, this fix would still crash uncaught.
+    monkeypatch.setattr(
+        "resume.extract.extract_profile", MagicMock(side_effect=SystemExit("Resume profile extraction failed: boom"))
+    )
+
+    at = AppTest.from_file(ADMIN_PY)
+    at.run()
+    at.file_uploader[0].set_value(("resume.txt", b"Jane Doe\nSenior ML Engineer", "text/plain"))
+    at.run()
+
+    register_button = next(b for b in at.button if b.label == "Extract & Register Profile")
+    register_button.click().run()
+
+    assert len(at.error) == 1
+    assert "Resume profile extraction failed: boom" in at.error[0].value
+    assert at.session_state["cv_registration_in_progress"] is False

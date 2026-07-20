@@ -12,6 +12,7 @@ from typing import Optional
 from google import genai
 from pydantic import BaseModel
 
+from llm_errors import GEMINI_CALL_EXCEPTIONS, raise_llm_call_failure
 from resume.extract import ResumeProfile
 
 MODEL = "gemini-3.5-flash"
@@ -58,17 +59,20 @@ def score_job_match(
     job_raw_text: str, profile: ResumeProfile, *, client: Optional[genai.Client] = None
 ) -> MatchScore:
     client = client or genai.Client()
-    interaction = client.interactions.create(
-        model=MODEL,
-        system_instruction=_SYSTEM_INSTRUCTION,
-        input=_build_input(job_raw_text, profile),
-        response_format={
-            "type": "text",
-            "mime_type": "application/json",
-            "schema": MatchScore.model_json_schema(),
-        },
-    )
-    return MatchScore.model_validate_json(interaction.output_text)
+    try:
+        interaction = client.interactions.create(
+            model=MODEL,
+            system_instruction=_SYSTEM_INSTRUCTION,
+            input=_build_input(job_raw_text, profile),
+            response_format={
+                "type": "text",
+                "mime_type": "application/json",
+                "schema": MatchScore.model_json_schema(),
+            },
+        )
+        return MatchScore.model_validate_json(interaction.output_text)
+    except GEMINI_CALL_EXCEPTIONS as exc:
+        raise_llm_call_failure("Match scoring failed", exc)
 
 
 def match_verdict(score: int) -> str:

@@ -227,8 +227,12 @@ with col1:
     if st.button("Extract & Check Sponsor", type="primary", disabled=not raw_text.strip()):
         _reset_job_state()
         with st.spinner("Extracting job details..."):
-            st.session_state.extraction = extract_job(raw_text)
-        st.session_state.raw_text = raw_text
+            try:
+                st.session_state.extraction = extract_job(raw_text)
+            except SystemExit as exc:
+                st.error(error_display_text(exc))
+            else:
+                st.session_state.raw_text = raw_text
 with col2:
     if st.button("Clear"):
         _reset_job_state()
@@ -380,17 +384,26 @@ if extraction:
                 match_result = None
                 if profile:
                     with st.spinner("Scoring match against your resume..."):
-                        match_result = score_job_match(st.session_state.raw_text, profile)
-                    verdict_label = match_verdict(match_result.score)
-                    update_match_verdict(
-                        jobs_conn,
-                        job_id,
-                        score=match_result.score,
-                        verdict=verdict_label,
-                        matched_skills=match_result.matched_skills,
-                        missing_skills=match_result.missing_skills,
-                        reasoning=match_result.reasoning,
-                    )
+                        try:
+                            match_result = score_job_match(st.session_state.raw_text, profile)
+                        except SystemExit as exc:
+                            # The job/salary save above already succeeded (this
+                            # only wraps the match-score call) - a warning, not
+                            # an error, since the save this button promised
+                            # still went through; match_result stays None so
+                            # everything below that depends on it just skips.
+                            st.warning(f"Match scoring failed: {error_display_text(exc)}")
+                    if match_result:
+                        verdict_label = match_verdict(match_result.score)
+                        update_match_verdict(
+                            jobs_conn,
+                            job_id,
+                            score=match_result.score,
+                            verdict=verdict_label,
+                            matched_skills=match_result.matched_skills,
+                            missing_skills=match_result.missing_skills,
+                            reasoning=match_result.reasoning,
+                        )
             finally:
                 jobs_conn.close()
 

@@ -1,5 +1,9 @@
 from unittest.mock import MagicMock
 
+import httpx
+import pytest
+from google.genai._gaos.lib import compat_errors
+
 from jobs.match_score import (
     MATCH_THRESHOLD,
     STRONG_MATCH,
@@ -40,6 +44,18 @@ def test_score_job_match_calls_gemini_with_profile_and_job_text_and_parses_outpu
     assert "Senior GenAI Engineer job posting text" in sent_input
     assert "LangGraph" in sent_input
     assert "senior" in sent_input
+
+
+def test_score_job_match_raises_system_exit_on_connection_error():
+    fake_client = MagicMock()
+    original = compat_errors.APIConnectionError(
+        message="Connection refused", request=httpx.Request("POST", "https://example.com")
+    )
+    fake_client.interactions.create.side_effect = original
+
+    with pytest.raises(SystemExit, match="Match scoring failed: Connection refused") as exc_info:
+        score_job_match("job posting text", _PROFILE, client=fake_client)
+    assert exc_info.value.__cause__ is original
 
 
 def test_match_verdict_threshold_boundaries():

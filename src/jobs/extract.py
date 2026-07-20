@@ -11,6 +11,8 @@ from typing import Optional
 from google import genai
 from pydantic import BaseModel
 
+from llm_errors import GEMINI_CALL_EXCEPTIONS, raise_llm_call_failure
+
 MODEL = "gemini-3.5-flash"
 
 _SYSTEM_INSTRUCTION = (
@@ -42,14 +44,17 @@ class JobExtraction(BaseModel):
 def extract_job(raw_text: str, *, client: Optional[genai.Client] = None) -> JobExtraction:
     """Extract structured fields from a raw pasted job posting via Gemini."""
     client = client or genai.Client()
-    interaction = client.interactions.create(
-        model=MODEL,
-        system_instruction=_SYSTEM_INSTRUCTION,
-        input=raw_text,
-        response_format={
-            "type": "text",
-            "mime_type": "application/json",
-            "schema": JobExtraction.model_json_schema(),
-        },
-    )
-    return JobExtraction.model_validate_json(interaction.output_text)
+    try:
+        interaction = client.interactions.create(
+            model=MODEL,
+            system_instruction=_SYSTEM_INSTRUCTION,
+            input=raw_text,
+            response_format={
+                "type": "text",
+                "mime_type": "application/json",
+                "schema": JobExtraction.model_json_schema(),
+            },
+        )
+        return JobExtraction.model_validate_json(interaction.output_text)
+    except GEMINI_CALL_EXCEPTIONS as exc:
+        raise_llm_call_failure("Job extraction failed", exc)

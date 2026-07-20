@@ -1,6 +1,8 @@
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
+from google.genai._gaos.lib import compat_errors
 
 from jobs.outreach import (
     EMAIL,
@@ -66,6 +68,20 @@ def test_draft_outreach_message_linkedin_note_over_limit_raises():
 
     assert exc_info.value.char_count == LINKEDIN_NOTE_MAX_CHARS + 1
     assert exc_info.value.draft_text == over_limit_message
+
+
+def test_draft_outreach_message_raises_system_exit_on_connection_error():
+    fake_client = MagicMock()
+    original = compat_errors.APIConnectionError(
+        message="Connection refused", request=httpx.Request("POST", "https://example.com")
+    )
+    fake_client.interactions.create.side_effect = original
+
+    with pytest.raises(SystemExit, match="Outreach drafting failed: Connection refused") as exc_info:
+        draft_outreach_message(
+            EMAIL, "job text", "Acme AI Ltd", "Sarah Cole", None, "narrative", "resume", client=fake_client
+        )
+    assert exc_info.value.__cause__ is original
 
 
 def test_draft_outreach_message_rejects_unknown_channel():

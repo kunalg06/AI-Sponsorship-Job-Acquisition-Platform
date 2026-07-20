@@ -12,6 +12,8 @@ from typing import Optional
 from google import genai
 from pydantic import BaseModel
 
+from llm_errors import GEMINI_CALL_EXCEPTIONS, raise_llm_call_failure
+
 MODEL = "gemini-3.5-flash"
 
 LINKEDIN_NOTE = "linkedin_note"
@@ -100,19 +102,22 @@ def draft_outreach_message(
 
     client = client or genai.Client()
     system_instruction = _SYSTEM_INSTRUCTION_TEMPLATE.format(channel_instruction=_CHANNEL_INSTRUCTIONS[channel])
-    interaction = client.interactions.create(
-        model=MODEL,
-        system_instruction=system_instruction,
-        input=_build_input(
-            job_raw_text, company_name, contact_name, contact_title, narrative_core, raw_resume_text, purpose
-        ),
-        response_format={
-            "type": "text",
-            "mime_type": "application/json",
-            "schema": OutreachDraft.model_json_schema(),
-        },
-    )
-    result = OutreachDraft.model_validate_json(interaction.output_text)
+    try:
+        interaction = client.interactions.create(
+            model=MODEL,
+            system_instruction=system_instruction,
+            input=_build_input(
+                job_raw_text, company_name, contact_name, contact_title, narrative_core, raw_resume_text, purpose
+            ),
+            response_format={
+                "type": "text",
+                "mime_type": "application/json",
+                "schema": OutreachDraft.model_json_schema(),
+            },
+        )
+        result = OutreachDraft.model_validate_json(interaction.output_text)
+    except GEMINI_CALL_EXCEPTIONS as exc:
+        raise_llm_call_failure("Outreach drafting failed", exc)
 
     if channel == LINKEDIN_NOTE and len(result.message) > LINKEDIN_NOTE_MAX_CHARS:
         raise OutreachLengthError(

@@ -2,8 +2,11 @@ import io
 from unittest.mock import MagicMock
 
 import docx
+import httpx
+import pytest
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from google.genai._gaos.lib import compat_errors
 
 from resume.extract import (
     MODEL,
@@ -55,6 +58,18 @@ def test_extract_profile_calls_gemini_with_expected_shape_and_parses_output():
     assert kwargs["model"] == MODEL
     assert kwargs["input"] == "some raw resume text"
     assert kwargs["response_format"]["schema"] == ResumeProfile.model_json_schema()
+
+
+def test_extract_profile_raises_system_exit_on_connection_error():
+    fake_client = MagicMock()
+    original = compat_errors.APIConnectionError(
+        message="Connection refused", request=httpx.Request("POST", "https://example.com")
+    )
+    fake_client.interactions.create.side_effect = original
+
+    with pytest.raises(SystemExit, match="Resume profile extraction failed: Connection refused") as exc_info:
+        extract_profile("some raw resume text", client=fake_client)
+    assert exc_info.value.__cause__ is original
 
 
 def test_extract_text_from_docx_joins_paragraph_text_with_newlines():

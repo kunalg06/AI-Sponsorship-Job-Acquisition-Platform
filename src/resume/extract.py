@@ -16,6 +16,8 @@ from docx.text.paragraph import Paragraph
 from google import genai
 from pydantic import BaseModel
 
+from llm_errors import GEMINI_CALL_EXCEPTIONS, raise_llm_call_failure
+
 MODEL = "gemini-3.5-flash"
 
 _MAX_SDT_DEPTH = 20  # defensive ceiling against pathological/adversarial nesting - real CV content controls are never nested this deep
@@ -45,17 +47,20 @@ class ResumeProfile(BaseModel):
 def extract_profile(raw_resume_text: str, *, client: Optional[genai.Client] = None) -> ResumeProfile:
     """Extract a structured candidate profile from raw pasted resume text via Gemini."""
     client = client or genai.Client()
-    interaction = client.interactions.create(
-        model=MODEL,
-        system_instruction=_SYSTEM_INSTRUCTION,
-        input=raw_resume_text,
-        response_format={
-            "type": "text",
-            "mime_type": "application/json",
-            "schema": ResumeProfile.model_json_schema(),
-        },
-    )
-    return ResumeProfile.model_validate_json(interaction.output_text)
+    try:
+        interaction = client.interactions.create(
+            model=MODEL,
+            system_instruction=_SYSTEM_INSTRUCTION,
+            input=raw_resume_text,
+            response_format={
+                "type": "text",
+                "mime_type": "application/json",
+                "schema": ResumeProfile.model_json_schema(),
+            },
+        )
+        return ResumeProfile.model_validate_json(interaction.output_text)
+    except GEMINI_CALL_EXCEPTIONS as exc:
+        raise_llm_call_failure("Resume profile extraction failed", exc)
 
 
 def _iter_sdt_unwrapped_children(parent_element, leaf_tags):

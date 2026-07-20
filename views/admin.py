@@ -218,7 +218,12 @@ if register_clicked and not already_registered and not cv_registration_in_progre
 
         with st.spinner("Extracting profile from your CV..."):
             profile = extract_profile(raw_text)
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
+        # SystemExit isn't an Exception subclass (this codebase's own
+        # convention for a Gemini-call failure - see llm_errors) - without
+        # it here, an API failure would propagate past this handler
+        # uncaught, which for SystemExit specifically risks taking down the
+        # whole Streamlit server process, not just this page.
         st.error(error_display_text(exc))
         st.session_state["cv_registration_in_progress"] = False
     else:
