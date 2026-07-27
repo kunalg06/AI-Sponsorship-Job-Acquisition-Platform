@@ -2,12 +2,13 @@
 title: "Widen the CLI's outreach write-failure marker catch to BaseException"
 type: 'bugfix'
 created: '2026-07-27'
-status: 'in-review'
+status: 'done'
 review_loop_iteration: 0
 followup_review_recommended: false
 context: []
 warnings: []
 baseline_revision: '02ee0ca62a21ea4d5dca1c6bc8e0e96d3e039e61'
+final_revision: 'be2691899788f5e0ad3e45d8dc6f8dd28e45cfd9'
 ---
 
 <intent-contract>
@@ -59,6 +60,21 @@ baseline_revision: '02ee0ca62a21ea4d5dca1c6bc8e0e96d3e039e61'
 **Commands:**
 - `uv run pytest tests/test_jobs_cli.py -q` -- expected: all tests pass, including the new one.
 - `uv run pytest -q` -- expected: full suite passes, no regressions elsewhere.
+
+## Auto Run Result
+
+**Summary:** Widened `jobs/cli.py`'s `_draft_and_store_outreach` write-failure marker catch from `except Exception as mark_exc:` to `except BaseException as mark_exc:`, mirroring the fix already merged in `jobs/ui_actions.py`'s Streamlit twin. Pre-emptively applied the lesson from that prior review (routed the warning print through a new local `_str_or_empty` helper instead of a raw f-string), then review still caught a coverage gap in that pre-emptive fix itself.
+
+**Files changed:**
+- `src/jobs/cli.py` -- added a module-private `_str_or_empty` helper (a deliberate local duplicate of `jobs.ui_actions._str_or_empty`, not an import, since `ui_actions.py` imports from `cli.py` and not the reverse); widened the except clause; routed the warning print through the helper; expanded the explanatory comment.
+- `tests/test_jobs_cli.py` -- added 2 tests: a `KeyboardInterrupt`-raising marker case (with `capsys` assertions), and a case where the marker exception's own `__str__` raises (exercising `_str_or_empty`'s inner guard branch, which the `KeyboardInterrupt` case doesn't reach).
+- `_bmad-output/implementation-artifacts/deferred-work.md` -- closed the source ledger entry; logged 2 new, out-of-scope adjacent gaps (the primary `exc` interpolation has the same unprotected-`__str__` risk; every `print()` in this function is unguarded against encoding errors).
+
+**Review findings breakdown:** 3 patched (1 medium — missing str()-raises test coverage; 2 low — no diagnostic-text assertion, undocumented widening rationale), 2 deferred (both medium — the primary-`exc` asymmetry, and unguarded `print()` calls; both pre-existing and out of this spec's frozen scope), 5 rejected (the deliberate `KeyboardInterrupt`/`SystemExit` tradeoff already accepted twice in this series; `_str_or_empty`'s own design mirroring its already-merged twin; bare type-name convention matching `error_display_text`; synthetic test scenario; intentional narrow-vs-broad except asymmetry). 0 intent gaps, 0 bad-spec loopbacks.
+
+**Verification performed:** `uv run pytest tests/test_jobs_cli.py -q` and full suite `uv run pytest -q` — 375/375 passing, 0 regressions, both before and after review patches.
+
+**Residual risks:** None material beyond the two newly-logged, pre-existing, out-of-scope gaps (both affecting this same function, both candidates for a future dedicated pass if this codebase ever hardens its print-based diagnostics more broadly). This closes out the last of the mechanically-fixable items surfaced by the original `spec-error-display-str-or-empty-baseexception` review chain; the remaining open deferred-work items are explicitly accepted trade-offs, not further mechanical fixes.
 
 ## Spec Change Log
 
