@@ -203,6 +203,39 @@ def test_error_display_text_survives_a_str_that_itself_raises():
     assert "BrokenStr" in text
 
 
+def test_error_display_text_survives_a_str_that_raises_a_non_exception_baseexception():
+    # Unlike test_error_display_text_survives_a_str_that_itself_raises above
+    # (an Exception-raising __str__, already caught pre-fix), this exercises
+    # the actual gap the fix closed: __str__ raising something outside the
+    # Exception hierarchy entirely.
+    class BrokenStr(Exception):
+        def __str__(self):
+            raise KeyboardInterrupt("__str__ is broken")
+
+    exc = BrokenStr()
+
+    text = error_display_text(exc)
+
+    assert text == f"{type(exc).__name__}: (no error message)"
+
+
+def test_error_display_text_survives_a_str_that_raises_system_exit():
+    # SystemExit specifically, since it's this codebase's own real-world
+    # BaseException convention (see error_display_text's docstring) - not
+    # just the synthetic KeyboardInterrupt case above. Guards against a
+    # regression that narrows the except clause to (Exception,
+    # KeyboardInterrupt) and still passes the test above.
+    class BrokenStr(Exception):
+        def __str__(self):
+            raise SystemExit("__str__ is broken")
+
+    exc = BrokenStr()
+
+    text = error_display_text(exc)
+
+    assert text == f"{type(exc).__name__}: (no error message)"
+
+
 def test_error_display_text_surfaces_explicit_cause_message_when_str_exc_is_empty():
     try:
         try:

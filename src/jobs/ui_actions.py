@@ -34,7 +34,12 @@ from jobs.outreach_db import insert_outreach_message, mark_outreach_write_failed
 def _str_or_empty(exc: BaseException) -> str:
     try:
         return str(exc).strip()
-    except Exception:
+    except BaseException:
+        # Deliberately as broad as the type it catches: a chain link's
+        # __str__ can raise anything, including a non-Exception
+        # BaseException (e.g. SystemExit from a broken __str__) - this is
+        # the safety net error_display_text itself relies on to never crash
+        # while rendering an error, so it must never crash either.
         return ""
 
 
