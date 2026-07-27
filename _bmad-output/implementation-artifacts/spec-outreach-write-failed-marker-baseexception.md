@@ -2,12 +2,13 @@
 title: 'Widen `mark_outreach_write_failed`'s recovery catch to `BaseException`'
 type: 'bugfix'
 created: '2026-07-27'
-status: 'in-review'
+status: 'done'
 review_loop_iteration: 0
 followup_review_recommended: false
 context: []
 warnings: []
 baseline_revision: 'aa5dd293512676ad169b7e80bc0647173f3e790d'
+final_revision: 'c2e234a52edbf908bf28671e169b4e5786001ad8'
 ---
 
 <intent-contract>
@@ -56,6 +57,21 @@ baseline_revision: 'aa5dd293512676ad169b7e80bc0647173f3e790d'
 **Commands:**
 - `uv run pytest tests/test_ui_actions.py -q` -- expected: all tests pass, including the new one.
 - `uv run pytest -q` -- expected: full suite passes, no regressions elsewhere.
+
+## Auto Run Result
+
+**Summary:** Widened `draft_and_save_outreach`'s best-effort write-failure marker catch (`src/jobs/ui_actions.py`) from `except Exception as mark_exc:` to `except BaseException as mark_exc:`, mirroring the `_str_or_empty` fix in the same file/prior iteration. Review caught and fixed a latent bug in the fix itself: the warning print still interpolated `{mark_exc}` directly, which would crash the except block (skipping the intended `SystemExit`) if `mark_exc`'s own `__str__` raised — now routed through `_str_or_empty` with a type-name fallback.
+
+**Files changed:**
+- `src/jobs/ui_actions.py` -- widened the except clause; routed the warning print through `_str_or_empty`; expanded the explanatory comment.
+- `tests/test_ui_actions.py` -- added 2 tests: a `SystemExit`-raising marker case and a `KeyboardInterrupt`-raising marker case, both asserting the original write-failure `SystemExit` still propagates and the stderr warning still prints.
+- `_bmad-output/implementation-artifacts/deferred-work.md` -- closed the source ledger entry; logged one new, out-of-scope adjacent gap (`jobs/cli.py`'s `_draft_and_store_outreach` has the identical unfixed pattern).
+
+**Review findings breakdown:** 4 patched (1 medium — the crash-in-the-except-block bug; 3 low — missing warning-print test coverage, single-subtype test coverage, undocumented blast radius), 1 deferred (medium — CLI twin in a different file), 6 rejected (verified-inapplicable Streamlit-exception concern, deliberate accepted `KeyboardInterrupt`/`GeneratorExit` tradeoff, an out-of-scope docstring edit the frozen contract explicitly disallows, and other marginal nits). 0 intent gaps, 0 bad-spec loopbacks.
+
+**Verification performed:** `uv run pytest tests/test_ui_actions.py -q` and full suite `uv run pytest -q` — 373/373 passing, 0 regressions, both before and after the review patches.
+
+**Residual risks:** None material beyond the already-logged CLI-twin gap. The rejected `KeyboardInterrupt`/`GeneratorExit`-swallowing tradeoff mirrors the prior iteration's identical, already-accepted-as-low-likelihood reasoning — verified this time that the Streamlit-control-flow-exception variant of that concern doesn't even apply, since `mark_outreach_write_failed` has zero Streamlit dependency.
 
 ## Spec Change Log
 
