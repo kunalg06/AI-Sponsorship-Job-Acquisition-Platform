@@ -2,12 +2,13 @@
 title: 'Widen `_str_or_empty`'s exception catch to `BaseException`'
 type: 'bugfix'
 created: '2026-07-27'
-status: 'in-review'
+status: 'done'
 review_loop_iteration: 0
 followup_review_recommended: false
 context: []
 warnings: []
 baseline_revision: '6ca389ed44d7603c94b52db816252e3e4674decd'
+final_revision: '7e5fd06bd888bf2c4aea60141e2c0b03d358df3b'
 ---
 
 <intent-contract>
@@ -77,3 +78,18 @@ Deferred to ledger: `mark_outreach_write_failed`'s sibling `except Exception as 
 **Commands:**
 - `uv run pytest tests/test_ui_actions.py -q` -- expected: all tests pass, including the new one.
 - `uv run pytest -q` -- expected: full suite passes, no regressions elsewhere.
+
+## Auto Run Result
+
+**Summary:** Widened `_str_or_empty` (`src/jobs/ui_actions.py`) from `except Exception:` to `except BaseException:` so a chain-linked exception whose `__str__` raises a non-`Exception` `BaseException` (e.g. `SystemExit`, `KeyboardInterrupt`) can no longer crash `error_display_text`, the shared safety net every Streamlit view uses to render errors.
+
+**Files changed:**
+- `src/jobs/ui_actions.py` -- widened the except clause; added a comment explaining the deliberate broad catch.
+- `tests/test_ui_actions.py` -- added 2 tests: a synthetic `KeyboardInterrupt`-raising `__str__` case, and a `SystemExit`-raising `__str__` case (this codebase's real `BaseException` convention), with a cross-reference comment distinguishing both from the pre-existing `Exception`-raising-`__str__` test.
+- `_bmad-output/implementation-artifacts/deferred-work.md` -- closed the source ledger entry (originally from `spec-error-display-chained-cause`'s review) with a resolution note; logged one new, out-of-scope adjacent gap (`mark_outreach_write_failed`'s sibling narrow catch at `ui_actions.py:174`).
+
+**Review findings breakdown:** 5 patched (2 medium, 3 low — missing rationale comment, missing `SystemExit` test coverage, missing test cross-reference), 1 deferred (low — sibling narrow-catch in a different, untouched function), 6 rejected (critiques of the frozen approach's inherent, already-accepted-as-low-likelihood tradeoffs; a stricter-than-sibling test assertion; scope-boundary observations). 0 intent gaps, 0 bad-spec loopbacks.
+
+**Verification performed:** `uv run pytest tests/test_ui_actions.py -q` (24 → then re-verified at 24 passed after patches) and full suite `uv run pytest -q` — 371/371 passing, 0 regressions, both before and after the review patches.
+
+**Residual risks:** None material. The rejected findings' underlying tradeoff (a genuine `KeyboardInterrupt`/`SystemExit` raised in the microsecond window of a `str(exc)` call now resolves to an empty string instead of propagating) is the same tradeoff already assessed as extremely-low-likelihood when this item was first logged — no new exposure introduced. One adjacent, structurally-identical gap in a different function is tracked in the ledger for separate, future attention.
