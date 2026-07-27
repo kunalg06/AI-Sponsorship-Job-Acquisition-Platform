@@ -886,6 +886,13 @@ def _load_resume_and_narrative(profile_db: str):
     return raw_resume_text, narrative_core
 
 
+def _str_or_empty(exc: BaseException) -> str:
+    try:
+        return str(exc).strip()
+    except BaseException:
+        return ""
+
+
 def _draft_and_store_outreach(
     conn,
     job,
@@ -937,11 +944,20 @@ def _draft_and_store_outreach(
         print(f"  {draft.message}")
         try:
             mark_outreach_write_failed(conn, message_id)
-        except Exception as mark_exc:
+        except BaseException as mark_exc:
             # Best-effort: this runs after the file write already failed, so
             # a second failure here (e.g. the same disk backs this DB too)
             # must not replace the more informative SystemExit below.
-            print(f"  (also failed to mark message #{message_id} as a known write-failure: {mark_exc})")
+            # Deliberately BaseException, not Exception (mirrors
+            # jobs.ui_actions._str_or_empty's identical rationale) - this
+            # must never itself raise, so the message text goes through
+            # _str_or_empty rather than a raw f-string, since a mark_exc
+            # whose own __str__ raises would otherwise crash this except
+            # block and skip the SystemExit entirely.
+            print(
+                f"  (also failed to mark message #{message_id} as a known write-failure: "
+                f"{_str_or_empty(mark_exc) or type(mark_exc).__name__})"
+            )
         raise SystemExit(
             f"Job #{job['id']}: outreach message #{message_id} ({channel}, {len(draft.message)} chars) "
             f"was logged to the database, but writing its text to {path} failed: {exc}. "

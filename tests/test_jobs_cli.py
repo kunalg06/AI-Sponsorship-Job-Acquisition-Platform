@@ -1237,6 +1237,75 @@ def test_cmd_outreach_write_failure_survives_the_write_failure_marker_itself_fai
         )
 
 
+def test_cmd_outreach_write_failure_survives_a_non_exception_baseexception_from_the_marker(
+    outreach_env, monkeypatch, capsys
+):
+    # Same as the sibling test above, but the marker raises a non-Exception
+    # BaseException (KeyboardInterrupt, which also has an empty str()) -
+    # the widened `except BaseException` must still catch it, and the
+    # type-name fallback must still let the original, more informative
+    # write-failure SystemExit be what the operator sees. Also confirms the
+    # fallback diagnostic actually names the type, not just that the right
+    # SystemExit fires.
+    monkeypatch.setattr(jobs_cli, "_atomic_write_text", MagicMock(side_effect=OSError("disk full")))
+    monkeypatch.setattr(jobs_cli, "mark_outreach_write_failed", MagicMock(side_effect=KeyboardInterrupt()))
+
+    with pytest.raises(SystemExit, match="was logged to the database.*text itself was not saved"):
+        _run(
+            [
+                "outreach",
+                str(outreach_env["job_id"]),
+                "--channel",
+                LINKEDIN_NOTE,
+                "--db",
+                str(outreach_env["jobs_db"]),
+                "--profile-db",
+                str(outreach_env["profile_db"]),
+                "--out-dir",
+                str(outreach_env["out_dir"]),
+            ]
+        )
+
+    stdout = capsys.readouterr().out
+    assert "also failed to mark message" in stdout
+    assert "KeyboardInterrupt" in stdout
+
+
+def test_cmd_outreach_write_failure_survives_a_marker_exception_whose_str_itself_raises(
+    outreach_env, monkeypatch, capsys
+):
+    # Unlike the KeyboardInterrupt case above (whose str() merely returns
+    # "" without raising), this exercises _str_or_empty's own inner
+    # `except BaseException: return ""` guard - the branch neither sibling
+    # test above actually reaches.
+    class BrokenStr(Exception):
+        def __str__(self):
+            raise RuntimeError("__str__ is broken")
+
+    monkeypatch.setattr(jobs_cli, "_atomic_write_text", MagicMock(side_effect=OSError("disk full")))
+    monkeypatch.setattr(jobs_cli, "mark_outreach_write_failed", MagicMock(side_effect=BrokenStr()))
+
+    with pytest.raises(SystemExit, match="was logged to the database.*text itself was not saved"):
+        _run(
+            [
+                "outreach",
+                str(outreach_env["job_id"]),
+                "--channel",
+                LINKEDIN_NOTE,
+                "--db",
+                str(outreach_env["jobs_db"]),
+                "--profile-db",
+                str(outreach_env["profile_db"]),
+                "--out-dir",
+                str(outreach_env["out_dir"]),
+            ]
+        )
+
+    stdout = capsys.readouterr().out
+    assert "also failed to mark message" in stdout
+    assert "BrokenStr" in stdout
+
+
 # --------------------------------------------------------------------------
 # `due` / `digest` - both driven through the real CLI wiring, matching this
 # file's own stated test philosophy
