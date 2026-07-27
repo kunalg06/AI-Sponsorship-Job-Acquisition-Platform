@@ -161,6 +161,78 @@ def test_draft_and_save_outreach_write_failure_after_db_commit_raises_error_cont
     assert messages[0]["write_failed_at"] is not None  # marks it as distinguishable from a later-deleted file
 
 
+def test_draft_and_save_outreach_marker_baseexception_does_not_replace_original_write_failure(
+    ui_outreach_env, monkeypatch, capsys
+):
+    """If the best-effort `mark_outreach_write_failed` call itself raises a
+    non-`Exception` `BaseException` (e.g. `SystemExit`), that must not
+    replace the more informative write-failure `SystemExit` the surrounding
+    code is about to raise - the exact regression the widened
+    `except BaseException` clause guards against. Also confirms the
+    best-effort warning itself was still printed, not silently dropped."""
+    monkeypatch.setattr(ui_actions, "_atomic_write_text", MagicMock(side_effect=OSError("disk full")))
+    monkeypatch.setattr(
+        ui_actions, "mark_outreach_write_failed", MagicMock(side_effect=SystemExit("marker also broke"))
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        draft_and_save_outreach(
+            ui_outreach_env["job_id"],
+            LINKEDIN_NOTE,
+            contact_id=None,
+            contact_name="Sarah Cole",
+            contact_title="Recruiter",
+            purpose=None,
+            jobs_db=str(ui_outreach_env["jobs_db"]),
+            profile_db=str(ui_outreach_env["profile_db"]),
+        )
+
+    message = str(exc_info.value)
+    assert "was logged to the database" in message
+    assert "Hi Sarah, let's talk." in message
+    assert "marker also broke" not in message
+
+    stderr = capsys.readouterr().err
+    assert "also failed to mark message" in stderr
+    assert "marker also broke" in stderr
+
+
+def test_draft_and_save_outreach_marker_keyboardinterrupt_does_not_replace_original_write_failure(
+    ui_outreach_env, monkeypatch, capsys
+):
+    """Same guard as the SystemExit case above, but with a different
+    non-Exception BaseException subtype - proves the fix isn't narrowly
+    tied to SystemExit specifically (a regression narrowing the except
+    clause to `except (Exception, SystemExit):` would still pass the
+    SystemExit test above but fail this one)."""
+    monkeypatch.setattr(ui_actions, "_atomic_write_text", MagicMock(side_effect=OSError("disk full")))
+    monkeypatch.setattr(
+        ui_actions, "mark_outreach_write_failed", MagicMock(side_effect=KeyboardInterrupt())
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        draft_and_save_outreach(
+            ui_outreach_env["job_id"],
+            LINKEDIN_NOTE,
+            contact_id=None,
+            contact_name="Sarah Cole",
+            contact_title="Recruiter",
+            purpose=None,
+            jobs_db=str(ui_outreach_env["jobs_db"]),
+            profile_db=str(ui_outreach_env["profile_db"]),
+        )
+
+    message = str(exc_info.value)
+    assert "was logged to the database" in message
+    assert "Hi Sarah, let's talk." in message
+
+    # KeyboardInterrupt() has an empty str() - the warning must still name
+    # the type instead of printing a bare, uninformative trailing colon.
+    stderr = capsys.readouterr().err
+    assert "also failed to mark message" in stderr
+    assert "KeyboardInterrupt" in stderr
+
+
 def test_error_display_text_returns_str_exc_unchanged_when_non_empty():
     exc = ValueError("disk full")
     assert error_display_text(exc) == "disk full"

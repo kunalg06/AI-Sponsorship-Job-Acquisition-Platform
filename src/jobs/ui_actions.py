@@ -176,12 +176,18 @@ def draft_and_save_outreach(
             # server stdout.
             try:
                 mark_outreach_write_failed(jobs_conn, message_id)
-            except Exception as mark_exc:
+            except BaseException as mark_exc:
                 # Best-effort: this runs after the file write already failed,
                 # so a second failure here must not replace the more
-                # informative SystemExit below.
+                # informative SystemExit below. Deliberately BaseException,
+                # not Exception (mirrors _str_or_empty's own rationale) -
+                # this must never itself raise, so the message text also
+                # goes through _str_or_empty rather than a raw f-string,
+                # since a mark_exc whose own __str__ raises would otherwise
+                # crash this except block and skip the SystemExit entirely.
                 print(
-                    f"Warning: also failed to mark message #{message_id} as a known write-failure: {mark_exc}",
+                    f"Warning: also failed to mark message #{message_id} as a known write-failure: "
+                    f"{_str_or_empty(mark_exc) or type(mark_exc).__name__}",
                     file=sys.stderr,
                 )
             raise SystemExit(
