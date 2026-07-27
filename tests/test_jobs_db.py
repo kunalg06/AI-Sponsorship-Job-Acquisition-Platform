@@ -3,17 +3,21 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from jobs.db import (
     BUSY_TIMEOUT_MS,
     connect,
     get_job,
     insert_job,
     list_applied_jobs,
+    list_discovery_queue,
     list_job_ids_and_company_names,
     list_jobs,
     list_legacy_tailored_rows,
     mark_applied,
     mark_discarded,
+    mark_discovery_reviewed,
     mark_reminders_sent_through,
     release_tailoring_lock,
     try_claim_tailoring_lock,
@@ -513,6 +517,237 @@ def test_mark_reminders_sent_through_sets_only_columns_up_to_milestone(tmp_path)
         assert row["reminder_3_sent_at"] is not None
         assert row["reminder_7_sent_at"] is not None
         assert row["reminder_14_sent_at"] is None
+    finally:
+        conn.close()
+
+
+def test_insert_job_persists_source_columns(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        extraction = JobExtraction(job_title="AI Engineer", company_name="Acme AI", is_agency_posting=False)
+        job_id = insert_job(
+            conn,
+            "raw text",
+            extraction,
+            source="indeed",
+            source_job_id="indeed-job-1",
+            source_posted_at="2026-07-20",
+            apply_url="https://to.indeed.com/abc123",
+        )
+
+        row = get_job(conn, job_id)
+        assert row["source"] == "indeed"
+        assert row["source_job_id"] == "indeed-job-1"
+        assert row["source_posted_at"] == "2026-07-20"
+        assert row["apply_url"] == "https://to.indeed.com/abc123"
+        assert row["discovery_reviewed_at"] is None
+    finally:
+        conn.close()
+
+
+def test_insert_job_omitting_source_kwargs_leaves_them_null_unchanged_from_before(tmp_path):
+    # Every pre-existing caller (the manual paste-in `intake` flow, every
+    # pre-existing test) never passes the new keyword-only args at all -
+    # this proves that path is completely unaffected.
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        extraction = JobExtraction(job_title="AI Engineer", is_agency_posting=False)
+        job_id = insert_job(conn, "raw text", extraction)
+
+        row = get_job(conn, job_id)
+        assert row["source"] is None
+        assert row["source_job_id"] is None
+        assert row["source_posted_at"] is None
+        assert row["apply_url"] is None
+    finally:
+        conn.close()
+
+
+def test_source_job_id_unique_index_rejects_a_duplicate_at_the_db_level(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        extraction = JobExtraction(job_title="AI Engineer", is_agency_posting=False)
+        insert_job(conn, "raw text", extraction, source="indeed", source_job_id="dup-id")
+
+        with pytest.raises(sqlite3.IntegrityError):
+            insert_job(conn, "raw text 2", extraction, source="indeed", source_job_id="dup-id")
+    finally:
+        conn.close()
+
+
+def test_source_job_id_null_never_collides_across_multiple_non_indeed_jobs(tmp_path):
+    # The partial index only covers non-NULL source_job_id values - every
+    # manually-pasted job (source_job_id always NULL) must keep inserting
+    # freely, proving the index doesn't accidentally become a UNIQUE
+    # constraint over the whole table.
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        extraction = JobExtraction(job_title="AI Engineer", is_agency_posting=False)
+        first_id = insert_job(conn, "raw text", extraction)
+        second_id = insert_job(conn, "raw text 2", extraction)
+        assert first_id != second_id
+    finally:
+        conn.close()
+
+
+def test_connect_creates_the_unique_index_on_a_pre_existing_db_missing_the_new_columns(tmp_path):
+    # Mirrors test_connect_adds_missing_columns_to_a_pre_existing_table above -
+    # a jobs.db from before this feature has no source_job_id column at all,
+    # so the index must only be created AFTER _ensure_columns adds it, not
+    # before (creating it against a nonexistent column would be a hard
+    # sqlite3 error).
+    db_path = tmp_path / "old.db"
+    bootstrap = sqlite3.connect(db_path)
+    bootstrap.execute(
+        """
+        CREATE TABLE jobs (
+            id INTEGER PRIMARY KEY,
+            raw_text TEXT NOT NULL,
+            job_title TEXT NOT NULL,
+            company_name TEXT,
+            is_agency_posting INTEGER NOT NULL,
+            agency_name TEXT,
+            client_name TEXT,
+            recruiter_name TEXT,
+            recruiter_contact TEXT,
+            location TEXT,
+            salary_raw TEXT,
+            employer_name_for_sponsor_check TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    bootstrap.commit()
+    bootstrap.close()
+
+    conn = connect(db_path)
+    try:
+        extraction = JobExtraction(job_title="AI Engineer", is_agency_posting=False)
+        insert_job(conn, "raw text", extraction, source="indeed", source_job_id="dup-id")
+        with pytest.raises(sqlite3.IntegrityError):
+            insert_job(conn, "raw text 2", extraction, source="indeed", source_job_id="dup-id")
+    finally:
+        conn.close()
+
+
+def test_mark_discovery_reviewed_sets_timestamp_and_leaves_everything_else_untouched(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        extraction = JobExtraction(job_title="AI Engineer", company_name="Acme AI", is_agency_posting=False)
+        job_id = insert_job(conn, "raw text", extraction, source="indeed", source_job_id="indeed-1")
+
+        mark_discovery_reviewed(conn, job_id)
+
+        row = get_job(conn, job_id)
+        assert row["discovery_reviewed_at"] is not None
+        assert row["job_title"] == "AI Engineer"
+        assert row["source"] == "indeed"
+    finally:
+        conn.close()
+
+
+def test_list_discovery_queue_only_returns_unreviewed_indeed_sourced_rows(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        extraction = JobExtraction(job_title="AI Engineer", is_agency_posting=False)
+
+        unreviewed_id = insert_job(conn, "raw text", extraction, source="indeed", source_job_id="indeed-1")
+        reviewed_id = insert_job(conn, "raw text", extraction, source="indeed", source_job_id="indeed-2")
+        mark_discovery_reviewed(conn, reviewed_id)
+        manual_id = insert_job(conn, "raw text", extraction)  # source is NULL - never in this queue
+
+        queue_ids = [row["id"] for row in list_discovery_queue(conn)]
+        assert queue_ids == [unreviewed_id]
+        assert reviewed_id not in queue_ids
+        assert manual_id not in queue_ids
+    finally:
+        conn.close()
+
+
+def test_list_discovery_queue_excludes_a_job_already_applied_or_discarded_elsewhere(tmp_path):
+    # A job discovered via Automate that the user already applied to (or
+    # discarded) from the ordinary Jobs List page must stop nagging here -
+    # nothing on that page clears discovery_reviewed_at, so the exclusion
+    # has to come from applied_status instead.
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        extraction = JobExtraction(job_title="AI Engineer", is_agency_posting=False)
+
+        applied_id = insert_job(conn, "raw text", extraction, source="indeed", source_job_id="indeed-applied")
+        mark_applied(conn, applied_id)
+        discarded_id = insert_job(conn, "raw text", extraction, source="indeed", source_job_id="indeed-discarded")
+        mark_discarded(conn, discarded_id)
+        still_pending_id = insert_job(conn, "raw text", extraction, source="indeed", source_job_id="indeed-pending")
+
+        queue_ids = [row["id"] for row in list_discovery_queue(conn)]
+        assert queue_ids == [still_pending_id]
+    finally:
+        conn.close()
+
+
+def test_list_discovery_queue_respects_the_limit_argument(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        extraction = JobExtraction(job_title="AI Engineer", is_agency_posting=False)
+        for i in range(3):
+            insert_job(conn, "raw text", extraction, source="indeed", source_job_id=f"indeed-{i}")
+
+        assert len(list_discovery_queue(conn, limit=2)) == 2
+        assert len(list_discovery_queue(conn, limit=10)) == 3
+    finally:
+        conn.close()
+
+
+def test_mark_discovery_reviewed_does_not_touch_a_non_indeed_job(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        manual_id = insert_job(conn, "raw text", JobExtraction(job_title="Manual paste", is_agency_posting=False))
+
+        mark_discovery_reviewed(conn, manual_id)
+
+        row = get_job(conn, manual_id)
+        assert row["discovery_reviewed_at"] is None
+    finally:
+        conn.close()
+
+
+def test_insert_job_rejects_source_without_source_job_id(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        with pytest.raises(ValueError):
+            insert_job(conn, "raw text", JobExtraction(job_title="AI Engineer", is_agency_posting=False), source="indeed")
+    finally:
+        conn.close()
+
+
+def test_list_discovery_queue_orders_by_match_score_desc_then_posted_at_desc(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        extraction = JobExtraction(job_title="AI Engineer", is_agency_posting=False)
+
+        low_score_id = insert_job(
+            conn, "raw text", extraction, source="indeed", source_job_id="indeed-low", source_posted_at="2026-07-20"
+        )
+        update_match_verdict(
+            conn, low_score_id, score=40, verdict="weak_match", matched_skills=[], missing_skills=[], reasoning="low"
+        )
+
+        high_score_older_id = insert_job(
+            conn, "raw text", extraction, source="indeed", source_job_id="indeed-high-older", source_posted_at="2026-07-18"
+        )
+        update_match_verdict(
+            conn, high_score_older_id, score=90, verdict="strong_match", matched_skills=[], missing_skills=[], reasoning="high"
+        )
+
+        high_score_newer_id = insert_job(
+            conn, "raw text", extraction, source="indeed", source_job_id="indeed-high-newer", source_posted_at="2026-07-22"
+        )
+        update_match_verdict(
+            conn, high_score_newer_id, score=90, verdict="strong_match", matched_skills=[], missing_skills=[], reasoning="high"
+        )
+
+        queue_ids = [row["id"] for row in list_discovery_queue(conn)]
+        assert queue_ids == [high_score_newer_id, high_score_older_id, low_score_id]
     finally:
         conn.close()
 

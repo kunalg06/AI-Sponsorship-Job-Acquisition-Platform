@@ -61,8 +61,26 @@ CREATE TABLE IF NOT EXISTS jobs (
     reminder_3_sent_at TEXT,
     reminder_7_sent_at TEXT,
     reminder_14_sent_at TEXT,
+    source TEXT,
+    source_job_id TEXT,
+    source_posted_at TEXT,
+    discovery_reviewed_at TEXT,
+    apply_url TEXT,
     created_at TEXT NOT NULL
 );
+"""
+
+# Deliberately a separate statement from SCHEMA (not appended into it):
+# _ensure_columns() below parses SCHEMA's CREATE TABLE body via a
+# split("(", 1) / rsplit(")", 1) slice - a second statement's own
+# parentheses (this index's `(source_job_id)`) would shift that slice and
+# corrupt the column list it computes for pre-existing DBs. NULLs excluded
+# means repeated inserts with source_job_id IS NULL (every non-Indeed job,
+# past and future) never collide with each other - only two *equal*,
+# non-NULL source_job_id values do, which is exactly what stops the same
+# Indeed posting from being staged twice across repeated daily searches.
+CREATE_INDEXES = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_source_job_id ON jobs(source_job_id) WHERE source_job_id IS NOT NULL;
 """
 
 
@@ -90,18 +108,44 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
     conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
     conn.executescript(SCHEMA)
     _ensure_columns(conn, "jobs", SCHEMA)
+    # Must run after _ensure_columns - a pre-existing DB from before this
+    # feature only gets its source_job_id column via the ALTER TABLE above,
+    # and this index can't be created against a column that doesn't exist yet.
+    conn.executescript(CREATE_INDEXES)
     return conn
 
 
-def insert_job(conn: sqlite3.Connection, raw_text: str, extraction: JobExtraction) -> int:
+def insert_job(
+    conn: sqlite3.Connection,
+    raw_text: str,
+    extraction: JobExtraction,
+    *,
+    source: Optional[str] = None,
+    source_job_id: Optional[str] = None,
+    source_posted_at: Optional[str] = None,
+    apply_url: Optional[str] = None,
+) -> int:
+    """Every existing caller (the manual `jobs intake` paste-in flow, and
+    every test that predates this feature) omits the four keyword-only
+    `source*`/`apply_url` args entirely, so they insert NULL exactly as
+    before - only `jobs.cli._cmd_stage_indeed` passes them. `source_job_id`
+    is the only one enforced unique (see `CREATE_INDEXES` above); passing it
+    for a posting that's already staged raises `sqlite3.IntegrityError` on
+    sqlite3, or a bare `ValueError` on the Turso/libsql backend (confirmed
+    empirically, not assumed - libsql has no IntegrityError subclass), which
+    callers must catch (see `_cmd_stage_indeed`'s friendly "already staged"
+    message) rather than crash on."""
+    if source is not None and not source_job_id:
+        raise ValueError("source_job_id is required whenever source is set - otherwise dedup can't be enforced.")
     with conn:
         cursor = conn.execute(
             """
             INSERT INTO jobs
                 (raw_text, job_title, company_name, is_agency_posting, agency_name,
                  client_name, recruiter_name, recruiter_contact, location, salary_raw,
-                 employer_name_for_sponsor_check, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 employer_name_for_sponsor_check, source, source_job_id, source_posted_at,
+                 apply_url, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 raw_text,
@@ -115,6 +159,10 @@ def insert_job(conn: sqlite3.Connection, raw_text: str, extraction: JobExtractio
                 extraction.location,
                 extraction.salary_raw,
                 extraction.employer_name_for_sponsor_check,
+                source,
+                source_job_id,
+                source_posted_at,
+                apply_url,
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
@@ -410,3 +458,47 @@ def mark_reminders_sent_through(conn: sqlite3.Connection, job_id: int, milestone
 
 def list_applied_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute("SELECT * FROM jobs WHERE applied_status = 'applied'").fetchall()
+
+
+def mark_discovery_reviewed(conn: sqlite3.Connection, job_id: int) -> None:
+    """Clears an Indeed-sourced row off the Automate review queue (see
+    `list_discovery_queue`) - deliberately just one timestamp column, not a
+    status enum or a second table: per spec-indeed-job-discovery.md's Design
+    Notes, once reviewed the row "behaves exactly like a manually-pasted job
+    everywhere else in the app," so there's nothing else to flip. Scoped to
+    `source = 'indeed'` so a non-Indeed job id can never be marked reviewed,
+    even though `views/automate.py` only ever passes ids it already knows
+    came from this same queue."""
+    with conn:
+        conn.execute(
+            "UPDATE jobs SET discovery_reviewed_at = ? WHERE id = ? AND source = 'indeed'",
+            (datetime.now(timezone.utc).isoformat(), job_id),
+        )
+
+
+def list_discovery_queue(conn: sqlite3.Connection, limit: int = 20) -> list[sqlite3.Row]:
+    """The Automate page's review queue: every Indeed-sourced row not yet
+    reviewed AND not already resolved elsewhere (applied or discarded via
+    the ordinary Jobs List page) - without the `applied_status IS NULL`
+    clause, a job the user already handled on another page would keep
+    nagging here forever, since nothing on the Jobs List side clears
+    `discovery_reviewed_at`. Sorted match-score-desc-then-posted-date-desc
+    rather than hard-filtered at some unvalidated match threshold - see
+    spec-indeed-job-discovery.md's Design Notes on why this project never
+    hides a candidate from the human, only ranks it. `match_score` is NULL
+    whenever no resume was on file yet at staging time (`_run_match_score`'s
+    existing no-profile skip) - SQLite's default NULL ordering sorts those
+    rows last in a DESC ordering, so an unscored row still appears (nothing
+    is ever hard-filtered out), just at the bottom rather than the top.
+    Capped at `limit` (mirrors `list_jobs`'s own default) since an unattended
+    daily discovery agent can otherwise accumulate an unbounded queue - the
+    opposite of what a "too busy to review often" feature should do."""
+    return conn.execute(
+        """
+        SELECT * FROM jobs
+        WHERE source = 'indeed' AND discovery_reviewed_at IS NULL AND applied_status IS NULL
+        ORDER BY match_score DESC, source_posted_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()

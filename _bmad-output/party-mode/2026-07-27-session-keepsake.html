@@ -1,0 +1,344 @@
+<title>Session Dossier — The Indeed Question</title>
+<style>
+  :root {
+    --bg: #ece4d3;
+    --bg-grain-a: #e2d9c3;
+    --bg-grain-b: #f3ecdb;
+    --surface: #fbf7ee;
+    --surface-edge: #d9cdae;
+    --ink: #1f2430;
+    --ink-soft: #5b5a4e;
+    --ink-faint: #8a8571;
+    --navy: #1f3a5f;
+    --navy-soft: #3a557a;
+    --brass: #8a6a2f;
+    --stamp: #9c2b26;
+    --stamp-green: #2f6b3e;
+    --rule: #c9bfa6;
+    --focus: #1f3a5f;
+    --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --font-body: Georgia, "Iowan Old Style", "Times New Roman", serif;
+    --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, "Courier New", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171d; --bg-grain-a: #191d24; --bg-grain-b: #0f1216;
+      --surface: #1c212a; --surface-edge: #333c4a;
+      --ink: #e9e3d2; --ink-soft: #b4ae9c; --ink-faint: #7a7666;
+      --navy: #8fb3e0; --navy-soft: #6f97c7;
+      --brass: #d4ac5c; --stamp: #e2726c; --stamp-green: #7fc98f; --rule: #3a4250;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14171d; --bg-grain-a: #191d24; --bg-grain-b: #0f1216;
+    --surface: #1c212a; --surface-edge: #333c4a;
+    --ink: #e9e3d2; --ink-soft: #b4ae9c; --ink-faint: #7a7666;
+    --navy: #8fb3e0; --navy-soft: #6f97c7;
+    --brass: #d4ac5c; --stamp: #e2726c; --stamp-green: #7fc98f; --rule: #3a4250;
+  }
+  :root[data-theme="light"] {
+    --bg: #ece4d3; --bg-grain-a: #e2d9c3; --bg-grain-b: #f3ecdb;
+    --surface: #fbf7ee; --surface-edge: #d9cdae;
+    --ink: #1f2430; --ink-soft: #5b5a4e; --ink-faint: #8a8571;
+    --navy: #1f3a5f; --navy-soft: #3a557a;
+    --brass: #8a6a2f; --stamp: #9c2b26; --stamp-green: #2f6b3e; --rule: #c9bfa6;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background:
+      radial-gradient(circle at 15% 20%, var(--bg-grain-a) 0%, transparent 45%),
+      radial-gradient(circle at 85% 70%, var(--bg-grain-b) 0%, transparent 50%),
+      var(--bg);
+    color: var(--ink);
+    font-family: var(--font-body);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+  a { color: var(--navy); }
+  a:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+
+  .page {
+    max-width: 46rem;
+    margin: 0 auto;
+    padding: clamp(1.5rem, 5vw, 4rem) clamp(1.25rem, 5vw, 2rem) 5rem;
+  }
+
+  .cover {
+    position: relative;
+    border: 1px solid var(--surface-edge);
+    background: var(--surface);
+    padding: clamp(1.75rem, 5vw, 3rem);
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    box-shadow: 0 1px 0 var(--rule);
+  }
+  .cover-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .cover h1 {
+    font-family: var(--font-display);
+    font-weight: 400;
+    font-size: clamp(1.8rem, 5vw, 2.6rem);
+    margin: 0;
+    text-wrap: balance;
+    color: var(--ink);
+  }
+  .cover .subtitle {
+    font-style: italic;
+    color: var(--ink-soft);
+    font-size: 1.02rem;
+    max-width: 36rem;
+  }
+  .stamp {
+    position: absolute;
+    top: clamp(1rem, 4vw, 2.2rem);
+    right: clamp(1rem, 4vw, 2.2rem);
+    border: 3px solid var(--stamp-green);
+    color: var(--stamp-green);
+    font-family: var(--font-mono);
+    font-weight: 700;
+    font-size: 0.66rem;
+    letter-spacing: 0.1em;
+    padding: 0.4rem 0.6rem;
+    transform: rotate(-8deg);
+    border-radius: 3px;
+    opacity: 0.9;
+    animation: stamp-in 0.5s cubic-bezier(.2,.9,.3,1.2) both;
+    animation-delay: 0.2s;
+    white-space: nowrap;
+  }
+  @keyframes stamp-in {
+    from { opacity: 0; transform: rotate(-8deg) scale(1.6); }
+    to   { opacity: 0.9; transform: rotate(-8deg) scale(1); }
+  }
+  .cover-meta {
+    display: flex;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    font-family: var(--font-mono);
+    font-size: 0.76rem;
+    color: var(--ink-soft);
+    border-top: 1px dashed var(--rule);
+    padding-top: 0.9rem;
+    margin-top: 0.4rem;
+  }
+  .cover-meta strong { color: var(--ink); font-weight: 600; }
+
+  .section-label {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--brass);
+    margin: 3rem 0 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .section-label::after { content: ""; flex: 1; height: 1px; background: var(--rule); }
+
+  .roster {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(13.5rem, 1fr));
+    gap: 0.9rem;
+  }
+  .badge {
+    background: var(--surface);
+    border: 1px solid var(--surface-edge);
+    padding: 0.9rem 1rem;
+    display: flex;
+    gap: 0.7rem;
+    align-items: flex-start;
+    opacity: 0;
+    transform: translateY(10px);
+    animation: rise 0.5s ease forwards;
+  }
+  .badge .icon { font-size: 1.3rem; line-height: 1; margin-top: 0.1rem; }
+  .badge .name { font-family: var(--font-display); font-size: 1.05rem; color: var(--ink); }
+  .badge .role {
+    font-family: var(--font-mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--navy);
+    margin: 0.15rem 0 0.35rem;
+  }
+  .badge .note { font-size: 0.84rem; color: var(--ink-soft); font-style: italic; }
+
+  .exhibit {
+    background: var(--surface);
+    border: 1px solid var(--surface-edge);
+    border-left: 3px solid var(--navy);
+    padding: 1.2rem 1.4rem;
+    margin-bottom: 1.1rem;
+    opacity: 0;
+    transform: translateY(14px);
+    animation: rise 0.6s ease forwards;
+  }
+  .exhibit.risk { border-left-color: var(--stamp); }
+  .exhibit.win { border-left-color: var(--stamp-green); }
+  .exhibit-tag {
+    font-family: var(--font-mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-bottom: 0.5rem;
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+  }
+  .exhibit-tag .who { color: var(--navy-soft); font-weight: 700; }
+  .exhibit p { margin: 0.35rem 0; }
+  .exhibit .line { font-family: var(--font-display); font-size: 1.05rem; }
+  .exhibit .quote {
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    color: var(--ink-soft);
+    background: color-mix(in srgb, var(--rule) 25%, transparent);
+    padding: 0.6rem 0.8rem;
+    margin-top: 0.6rem;
+    white-space: pre-wrap;
+  }
+
+  .verdict-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.7rem;
+  }
+  .verdict {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    background: var(--surface);
+    border: 1px solid var(--surface-edge);
+    padding: 0.8rem 1.1rem;
+    opacity: 0;
+    transform: translateY(10px);
+    animation: rise 0.5s ease forwards;
+  }
+  .verdict .mark {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 0.25rem 0.55rem;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+  .verdict .mark.go { color: var(--stamp-green); border: 1px solid var(--stamp-green); }
+  .verdict .mark.no { color: var(--stamp); border: 1px solid var(--stamp); }
+  .verdict .what { color: var(--ink); }
+  .verdict .why { color: var(--ink-faint); font-size: 0.85rem; }
+
+  .close {
+    margin-top: 3.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px dashed var(--rule);
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--ink-faint);
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 1rem;
+  }
+
+  @keyframes rise { to { opacity: 1; transform: translateY(0); } }
+  .roster .badge:nth-child(1) { animation-delay: .05s; }
+  .roster .badge:nth-child(2) { animation-delay: .12s; }
+  .roster .badge:nth-child(3) { animation-delay: .19s; }
+  .roster .badge:nth-child(4) { animation-delay: .26s; }
+  .roster .badge:nth-child(5) { animation-delay: .33s; }
+  .roster .badge:nth-child(6) { animation-delay: .40s; }
+  .exhibit:nth-of-type(1) { animation-delay: .1s; }
+  .exhibit:nth-of-type(2) { animation-delay: .2s; }
+  .exhibit:nth-of-type(3) { animation-delay: .3s; }
+  .exhibit:nth-of-type(4) { animation-delay: .4s; }
+  .verdict:nth-child(1) { animation-delay: .1s; }
+  .verdict:nth-child(2) { animation-delay: .18s; }
+  .verdict:nth-child(3) { animation-delay: .26s; }
+</style>
+
+<div class="page">
+
+  <div class="cover">
+    <div class="stamp">GREENLIT</div>
+    <div class="cover-eyebrow">
+      <span>Party Mode — Installed Cast</span>
+      <span>Case File No. 04</span>
+    </div>
+    <h1>The Indeed Question</h1>
+    <div class="subtitle">Can we automate job discovery without reopening the risk we already cut from V1? Turns out: yes, for one source — and a forgotten 85%-match role got found along the way.</div>
+    <div class="cover-meta">
+      <span><strong>Date</strong> 27 Jul 2026</span>
+      <span><strong>Runway</strong> 136 days to deadline</span>
+      <span><strong>Verdict</strong> Indeed: go · visasponsor.jobs: no · LinkedIn/Glassdoor: no</span>
+    </div>
+  </div>
+
+  <div class="section-label">The Room</div>
+  <div class="roster">
+    <div class="badge"><span class="icon">📋</span><div><div class="name">John</div><div class="role">Product Manager</div><div class="note">"Which job is this actually doing?"</div></div></div>
+    <div class="badge"><span class="icon">🧪</span><div><div class="name">Murat</div><div class="role">Risk &amp; Quality</div><div class="note">Read the Terms so nobody had to guess.</div></div></div>
+    <div class="badge"><span class="icon">🏗️</span><div><div class="name">Winston</div><div class="role">System Architect</div><div class="note">Found the boring, load-bearing shape.</div></div></div>
+    <div class="badge"><span class="icon">📊</span><div><div class="name">Mary</div><div class="role">Evidence</div><div class="note">Ran the real query before anyone opined.</div></div></div>
+    <div class="badge"><span class="icon">⚡</span><div><div class="name">Victor</div><div class="role">Personal-tool reframe</div><div class="note">Kept asking what actually moves the needle.</div></div></div>
+    <div class="badge"><span class="icon">💻</span><div><div class="name">Amelia</div><div class="role">Senior Engineer</div><div class="note">Caught the dedup gap before it shipped.</div></div></div>
+  </div>
+
+  <div class="section-label">Exhibits</div>
+
+  <div class="exhibit">
+    <div class="exhibit-tag"><span class="who">Mary</span> · live evidence, not a guess</div>
+    <p class="line">Pulled the actual jobs.db mid-argument, before anyone got to theorize.</p>
+    <div class="quote">25 jobs logged · 14 applied · 1 discarded
+#18 — ASOS.com, Senior AI/LLM Engineer, match 85/100 — still [pending]</div>
+  </div>
+
+  <div class="exhibit win">
+    <div class="exhibit-tag"><span class="who">You</span> · caught live, fixed live</div>
+    <p class="line">"Honestly forgot about it, let's mark it applied and move on."</p>
+    <p style="color: var(--ink-faint); font-size: 0.85rem;">Done in the same breath — job #18 marked applied, follow-up clock started. Ninety seconds, not a redesign.</p>
+  </div>
+
+  <div class="exhibit risk">
+    <div class="exhibit-tag"><span class="who">Murat</span> · the hard no</div>
+    <p class="line">Read visasponsor.jobs' actual Terms before ruling on it.</p>
+    <div class="quote">"Use of any material on the website for the purpose of
+creating a 'meta' search... by combining the information
+contained herein with other sources... is strictly prohibited."</div>
+    <p style="color: var(--ink-faint); font-size: 0.85rem;">Word for word, the thing this whole project does. Manual checks stay fine — automating it doesn't.</p>
+  </div>
+
+  <div class="exhibit">
+    <div class="exhibit-tag"><span class="who">Winston &amp; Amelia</span> · the shape that survived contact</div>
+    <p class="line">Indeed feeds a new staging table → full pipeline promotion on select → daily <code>/schedule</code> routine as primary, live-session trigger as fallback. Same code path, two triggers.</p>
+  </div>
+
+  <div class="section-label">Verdicts on Record</div>
+  <div class="verdict-grid">
+    <div class="verdict"><span class="mark go">GO</span><div><div class="what">Indeed MCP</div><div class="why">Official integration, verified live — real posted-dates, real apply links.</div></div></div>
+    <div class="verdict"><span class="mark no">NO</span><div><div class="what">visasponsor.jobs</div><div class="why">Its own Terms explicitly ban this exact use case.</div></div></div>
+    <div class="verdict"><span class="mark no">NO</span><div><div class="what">LinkedIn / Glassdoor scrapers</div><div class="why">Unofficial only — real account-ban risk, not worth it.</div></div></div>
+  </div>
+
+  <div class="close">
+    <span>Case closed — handed to Spec.</span>
+    <span>"Cheap and load-bearing over gorgeous and imaginary."</span>
+  </div>
+
+</div>

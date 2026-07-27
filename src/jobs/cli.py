@@ -9,8 +9,10 @@ import re
 import sqlite3
 import sys
 import urllib.error
+import urllib.parse
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -45,7 +47,7 @@ from jobs.docx_tailor import (
     generate_paragraph_edits,
     write_plain_docx,
 )
-from jobs.extract import extract_job
+from jobs.extract import JobExtraction, extract_job
 from jobs.match_score import MATCH_THRESHOLD, STRONG_MATCH, WEAK_MATCH, match_verdict, score_job_match
 from jobs.outreach import EMAIL, LINKEDIN_NOTE, OutreachLengthError, draft_outreach_message
 from jobs.outreach_db import (
@@ -228,6 +230,96 @@ def _cmd_intake(args: argparse.Namespace) -> None:
         print(f"  Contact:          {extraction.recruiter_contact or '(none given)'}")
         print(f"  Location:         {extraction.location or '(not stated)'}")
         print(f"  Salary:           {extraction.salary_raw or '(not stated)'}")
+
+        _run_sponsor_check(conn, args.sponsor_db, job_id, extraction.employer_name_for_sponsor_check, extraction.location)
+        _run_salary_check(conn, job_id, extraction.job_title, extraction.salary_raw)
+        _run_match_score(conn, args.profile_db, job_id, raw_text)
+    finally:
+        conn.close()
+
+
+def _cmd_stage_indeed(args: argparse.Namespace) -> None:
+    """Stage a single Indeed-discovered posting straight into the `jobs`
+    pipeline - deliberately no `extract_job` LLM call, since Indeed's own
+    `search_jobs`/`get_job_details` MCP tools already return title/company/
+    location/posted-date/apply-url as structured fields, not a blob of text
+    that needs an LLM to parse. Runs the exact same sponsor-check/
+    salary-check/match-score sequence `_cmd_intake` does, past its own
+    extraction step, so an Indeed-sourced row is scored identically to a
+    manually pasted one - see spec-indeed-job-discovery.md's "reuse the
+    pipeline unmodified" constraint.
+
+    Called by both the daily scheduled discovery agent and an on-demand
+    live-session run (same command either way - see the spec's Design
+    Notes on where the schedule lives), and by a human directly for a
+    one-off staging.
+
+    `source_job_id` is enforced unique at the DB level (a partial index -
+    see `jobs.db.CREATE_INDEXES`), so restaging the same posting from a
+    repeated daily search is caught here as a friendly no-op instead of
+    creating a duplicate row or crashing.
+
+    Deliberately never guesses `is_agency_posting`/`employer_name_for_sponsor_check`
+    beyond "same as the listed company" - Indeed's structured fields don't
+    distinguish a recruiting agency's name from the real hiring employer's,
+    and detecting that would need either an LLM call (the whole point of
+    this command is to skip one) or a fragile heuristic. Disclosed, not
+    hidden: `views/automate.py` shows a caveat next to the sponsor badge on
+    every Indeed-sourced row instead of presenting it as equally reliable
+    to a manually-pasted job's LLM-parsed employer name."""
+    if not args.source_job_id.strip():
+        raise SystemExit("--source-job-id must not be blank - an empty id would collide with every other blank id.")
+    try:
+        posted_date = datetime.fromisoformat(args.posted_date)
+    except ValueError:
+        raise SystemExit(f"--posted-date {args.posted_date!r} isn't a valid ISO date (e.g. 2026-07-20).")
+    if urllib.parse.urlparse(args.apply_url).scheme not in ("http", "https"):
+        raise SystemExit(f"--apply-url {args.apply_url!r} doesn't look like a real http(s) URL.")
+
+    raw_text = _read_input(args)
+    extraction = JobExtraction(
+        job_title=args.title,
+        company_name=args.company,
+        is_agency_posting=False,
+        agency_name=None,
+        client_name=None,
+        recruiter_name=None,
+        recruiter_contact=None,
+        location=args.location,
+        salary_raw=args.salary,
+        employer_name_for_sponsor_check=args.company,
+    )
+
+    conn = connect(args.db)
+    try:
+        try:
+            job_id = insert_job(
+                conn,
+                raw_text,
+                extraction,
+                source="indeed",
+                source_job_id=args.source_job_id,
+                source_posted_at=posted_date.date().isoformat(),
+                apply_url=args.apply_url,
+            )
+        except (sqlite3.IntegrityError, ValueError) as exc:
+            # libsql (the Turso/Streamlit-Cloud backend, unlike local
+            # sqlite3) raises a bare ValueError for a UNIQUE violation, not
+            # sqlite3.IntegrityError - confirmed empirically (`libsql.connect
+            # (":memory:")` + a real duplicate insert), not assumed from
+            # docs. Checking the message keeps this from swallowing an
+            # unrelated ValueError/IntegrityError as a false "already staged".
+            if "UNIQUE constraint failed" not in str(exc):
+                raise
+            print(f"Already staged (source_job_id={args.source_job_id!r}) - skipping.")
+            return
+
+        print(f"Staged job #{job_id} from Indeed")
+        print(f"  Title:            {extraction.job_title}")
+        print(f"  Company:          {extraction.company_name or '(not stated)'}")
+        print(f"  Location:         {extraction.location or '(not stated)'}")
+        print(f"  Posted:           {args.posted_date}")
+        print(f"  Apply URL:        {args.apply_url}")
 
         _run_sponsor_check(conn, args.sponsor_db, job_id, extraction.employer_name_for_sponsor_check, extraction.location)
         _run_salary_check(conn, job_id, extraction.job_title, extraction.salary_raw)
@@ -1217,6 +1309,33 @@ def build_parser() -> argparse.ArgumentParser:
     intake_parser.add_argument("--sponsor-db", default=DEFAULT_SPONSOR_DB, help="Sponsor register SQLite db path")
     intake_parser.add_argument("--profile-db", default=DEFAULT_PROFILE_DB, help="Candidate profile SQLite db path")
     intake_parser.set_defaults(func=_cmd_intake)
+
+    stage_indeed_parser = subparsers.add_parser(
+        "stage-indeed",
+        help=(
+            "Stage a single Indeed-discovered posting directly into the pipeline (no LLM "
+            "extraction) and run sponsor-check/salary-check/match-score - for the daily "
+            "discovery agent or an on-demand fallback run"
+        ),
+    )
+    stage_indeed_parser.add_argument("--title", required=True, help="Job title from the Indeed posting")
+    stage_indeed_parser.add_argument("--company", help="Company/employer name from the Indeed posting")
+    stage_indeed_parser.add_argument("--location", help="Job location from the Indeed posting")
+    stage_indeed_parser.add_argument("--salary", help="Indeed's compensation text for this posting, if it stated one")
+    stage_indeed_parser.add_argument(
+        "--posted-date", required=True, help="Indeed's 'Posted on' date for this listing, e.g. 2026-07-20"
+    )
+    stage_indeed_parser.add_argument("--apply-url", required=True, help="Indeed's real apply link (e.g. to.indeed.com/...)")
+    stage_indeed_parser.add_argument(
+        "--source-job-id",
+        required=True,
+        help="Indeed's unique id for this posting - enforced unique so a repeat daily search can't stage it twice",
+    )
+    stage_indeed_parser.add_argument("--file", help="Path to a text file containing the full job description (else reads stdin)")
+    stage_indeed_parser.add_argument("--db", default=DEFAULT_DB, help="Jobs SQLite db path")
+    stage_indeed_parser.add_argument("--sponsor-db", default=DEFAULT_SPONSOR_DB, help="Sponsor register SQLite db path")
+    stage_indeed_parser.add_argument("--profile-db", default=DEFAULT_PROFILE_DB, help="Candidate profile SQLite db path")
+    stage_indeed_parser.set_defaults(func=_cmd_stage_indeed)
 
     sponsor_check_parser = subparsers.add_parser("sponsor-check", help="Re-run the sponsor status check for a stored job")
     sponsor_check_parser.add_argument("job_id", type=int)

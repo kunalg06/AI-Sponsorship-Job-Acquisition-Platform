@@ -25,6 +25,7 @@ from jobs.cli import _outreach_message_path, _sanitize_filename, _tailored_docx_
 from jobs.db import connect as connect_jobs
 from jobs.db import get_job, insert_job, mark_applied, try_claim_tailoring_lock
 from jobs.extract import JobExtraction
+from jobs.match_score import MatchScore
 from jobs.outreach import EMAIL, LINKEDIN_NOTE, OutreachDraft
 from jobs.outreach_db import ensure_schema as ensure_outreach_schema
 from jobs.outreach_db import list_outreach_messages
@@ -1374,3 +1375,189 @@ def test_cmd_digest_on_an_empty_db_shows_every_section_as_empty(tmp_path, capsys
     assert "Applications in the last 7 days: 0" in out
     assert "Last outreach drafted: none yet" in out
     assert "Last tailored: none yet" in out
+
+
+# --------------------------------------------------------------------------
+# `stage-indeed` - Indeed-sourced postings staged directly (no LLM
+# extraction call) into the same jobs table + sponsor/salary/match pipeline
+# `intake` uses. See spec-indeed-job-discovery.md.
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def stage_indeed_env(tmp_path):
+    """jobs.db/sponsors.db/profile.db paths (none pre-seeded with a
+    profile - individual tests opt into `_add_profile_version` when they
+    need one) plus a real posting text file for `--file`."""
+    jobs_db = tmp_path / "jobs.db"
+    sponsor_db = tmp_path / "sponsors.db"
+    profile_db = tmp_path / "profile.db"
+    posting_file = tmp_path / "posting.txt"
+    posting_file.write_text("Full Indeed job description text goes here.", encoding="utf-8")
+
+    return {
+        "jobs_db": jobs_db,
+        "sponsor_db": sponsor_db,
+        "profile_db": profile_db,
+        "file_path": posting_file,
+    }
+
+
+def _stage_indeed_argv(
+    env,
+    *,
+    source_job_id: str = "indeed-job-1",
+    title: str = "AI Engineer",
+    company: Optional[str] = "Acme AI",
+    location: Optional[str] = "London, UK",
+    posted_date: str = "2026-07-20",
+    apply_url: str = "https://to.indeed.com/abc123",
+) -> list[str]:
+    argv = ["stage-indeed", "--title", title]
+    if company is not None:
+        argv += ["--company", company]
+    if location is not None:
+        argv += ["--location", location]
+    argv += [
+        "--posted-date",
+        posted_date,
+        "--apply-url",
+        apply_url,
+        "--source-job-id",
+        source_job_id,
+        "--file",
+        str(env["file_path"]),
+        "--db",
+        str(env["jobs_db"]),
+        "--sponsor-db",
+        str(env["sponsor_db"]),
+        "--profile-db",
+        str(env["profile_db"]),
+    ]
+    return argv
+
+
+def _all_job_rows(jobs_db_path):
+    conn = connect_jobs(jobs_db_path)
+    try:
+        return conn.execute("SELECT * FROM jobs").fetchall()
+    finally:
+        conn.close()
+
+
+def test_stage_indeed_happy_path_inserts_a_fully_scored_row_with_source_columns_set(stage_indeed_env, monkeypatch):
+    _add_profile_version(stage_indeed_env["profile_db"], RESUME_TEXT)
+    fake_match = MatchScore(score=82, matched_skills=["Python"], missing_skills=["Kubernetes"], reasoning="Good overlap.")
+    monkeypatch.setattr(jobs_cli, "score_job_match", MagicMock(return_value=fake_match))
+
+    _run(_stage_indeed_argv(stage_indeed_env))
+
+    rows = _all_job_rows(stage_indeed_env["jobs_db"])
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["source"] == "indeed"
+    assert row["source_job_id"] == "indeed-job-1"
+    assert row["source_posted_at"] == "2026-07-20"
+    assert row["apply_url"] == "https://to.indeed.com/abc123"
+    assert row["discovery_reviewed_at"] is None
+    assert row["job_title"] == "AI Engineer"
+    assert row["company_name"] == "Acme AI"
+    assert row["is_agency_posting"] == 0
+    assert row["sponsor_status"] is not None
+    assert row["sponsor_checked_at"] is not None
+    assert row["salary_status"] is not None
+    assert row["salary_checked_at"] is not None
+    assert row["match_score"] == 82
+    assert row["match_verdict"] == "strong_match"
+
+
+def test_stage_indeed_duplicate_source_job_id_is_a_friendly_no_op_not_a_crash(stage_indeed_env, monkeypatch, capsys):
+    monkeypatch.setattr(
+        jobs_cli, "score_job_match", MagicMock(return_value=MatchScore(score=50, matched_skills=[], missing_skills=[], reasoning="ok"))
+    )
+    _add_profile_version(stage_indeed_env["profile_db"], RESUME_TEXT)
+
+    _run(_stage_indeed_argv(stage_indeed_env))  # first staging succeeds
+    # Second attempt uses a different title - proves the no-op truly leaves
+    # the original row untouched, not just that the row count stays at 1.
+    _run(_stage_indeed_argv(stage_indeed_env, title="Totally Different Title"))
+
+    rows = _all_job_rows(stage_indeed_env["jobs_db"])
+    assert len(rows) == 1  # no duplicate row created
+    assert rows[0]["job_title"] == "AI Engineer"  # unchanged from the first, real staging
+
+    out = capsys.readouterr().out
+    assert "already staged" in out.lower()
+
+
+def test_stage_indeed_blank_company_and_location_still_stages(stage_indeed_env, monkeypatch, capsys):
+    # A redacted/blank company or location is a real, plausible Indeed
+    # listing (the sponsor-check pipeline already has a CANNOT_VERIFY
+    # verdict for exactly this case) - it must stage cleanly, not crash.
+    monkeypatch.setattr(
+        jobs_cli, "score_job_match", MagicMock(return_value=MatchScore(score=50, matched_skills=[], missing_skills=[], reasoning="ok"))
+    )
+    _add_profile_version(stage_indeed_env["profile_db"], RESUME_TEXT)
+
+    _run(_stage_indeed_argv(stage_indeed_env, company=None, location=None))
+
+    rows = _all_job_rows(stage_indeed_env["jobs_db"])
+    assert len(rows) == 1
+    assert rows[0]["company_name"] is None
+    assert rows[0]["location"] is None
+    assert rows[0]["sponsor_status"] is not None
+
+
+def test_stage_indeed_distinct_source_job_ids_both_get_staged(stage_indeed_env, monkeypatch):
+    monkeypatch.setattr(
+        jobs_cli, "score_job_match", MagicMock(return_value=MatchScore(score=50, matched_skills=[], missing_skills=[], reasoning="ok"))
+    )
+    _add_profile_version(stage_indeed_env["profile_db"], RESUME_TEXT)
+
+    _run(_stage_indeed_argv(stage_indeed_env, source_job_id="indeed-job-1"))
+    _run(_stage_indeed_argv(stage_indeed_env, source_job_id="indeed-job-2", title="ML Engineer"))
+
+    rows = _all_job_rows(stage_indeed_env["jobs_db"])
+    assert len(rows) == 2
+    assert {row["source_job_id"] for row in rows} == {"indeed-job-1", "indeed-job-2"}
+
+
+def test_stage_indeed_rejects_a_blank_source_job_id(stage_indeed_env):
+    with pytest.raises(SystemExit, match="must not be blank"):
+        _run(_stage_indeed_argv(stage_indeed_env, source_job_id="   "))
+
+    assert _all_job_rows(stage_indeed_env["jobs_db"]) == []
+
+
+def test_stage_indeed_rejects_a_non_iso_posted_date(stage_indeed_env):
+    with pytest.raises(SystemExit, match="isn't a valid ISO date"):
+        _run(_stage_indeed_argv(stage_indeed_env, posted_date="20th July"))
+
+    assert _all_job_rows(stage_indeed_env["jobs_db"]) == []
+
+
+def test_stage_indeed_rejects_a_non_http_apply_url(stage_indeed_env):
+    with pytest.raises(SystemExit, match="doesn't look like a real"):
+        _run(_stage_indeed_argv(stage_indeed_env, apply_url="not-a-url"))
+
+    assert _all_job_rows(stage_indeed_env["jobs_db"]) == []
+
+
+def test_stage_indeed_no_profile_on_file_still_inserts_sponsor_and_salary_but_skips_match_score(
+    stage_indeed_env, capsys
+):
+    # Deliberately no _add_profile_version call - profile_db has no profile
+    # row at all, matching _run_match_score's existing no-profile skip path.
+    _run(_stage_indeed_argv(stage_indeed_env))
+
+    rows = _all_job_rows(stage_indeed_env["jobs_db"])
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["source"] == "indeed"
+    assert row["sponsor_status"] is not None
+    assert row["salary_status"] is not None
+    assert row["match_score"] is None
+    assert row["match_checked_at"] is None
+
+    out = capsys.readouterr().out
+    assert "no resume on file yet" in out.lower()

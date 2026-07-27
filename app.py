@@ -86,6 +86,7 @@ pg = st.navigation(
         st.Page("views/digest.py", title="Daily Digest", icon="☕"),
         st.Page("views/roadmap.py", title="Roadmap", icon="\U0001f5fa"),
         st.Page("views/jobs_list.py", title="Jobs List", icon="\U0001f4cb"),
+        st.Page("views/automate.py", title="Automate", icon="\U0001f916"),
         st.Page("views/admin.py", title="Admin", icon="\u2699"),
     ]
 )
