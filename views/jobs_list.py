@@ -13,7 +13,7 @@ import streamlit as st
 
 from jobs.cli import DEFAULT_GENERATED_CV_DIR, _read_outreach_message_text, _resolve_contact, _tailored_docx_paths
 from jobs.db import connect as connect_jobs
-from jobs.db import get_job, list_applied_jobs, mark_applied, mark_discarded, mark_reminders_sent_through
+from jobs.db import delete_job, get_job, list_applied_jobs, mark_applied, mark_discarded, mark_reminders_sent_through
 from jobs.digest import list_due_reminders
 from jobs.outreach import EMAIL, LINKEDIN_NOTE, OutreachLengthError
 from jobs.outreach_db import ensure_schema as ensure_outreach_schema
@@ -185,9 +185,17 @@ with st.expander("\U0001f4ec Application Tracker (day 3 / 7 / 14 follow-ups)"):
 
         st.markdown("**All applied jobs:**")
         for job in applied_jobs:
-            st.caption(
+            tracker_col, delete_col = st.columns([5, 1])
+            tracker_col.caption(
                 f"#{job['id']} {job['job_title']} @ {job['company_name'] or '-'} — day {days_since(job['applied_at'])}"
             )
+            if delete_col.button("\U0001f5d1️", key=f"tracker_delete_{job['id']}", help="Delete - e.g. after a rejection"):
+                jobs_conn = connect_jobs(JOBS_DB)
+                try:
+                    delete_job(jobs_conn, job["id"])
+                finally:
+                    jobs_conn.close()
+                st.rerun()
 
 with st.expander("\U0001f4c1 All previously generated resumes & cover letters"):
     generated_root = Path(DEFAULT_GENERATED_CV_DIR)

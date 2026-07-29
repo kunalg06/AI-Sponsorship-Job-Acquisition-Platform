@@ -7,7 +7,10 @@ import pytest
 
 from jobs.db import (
     BUSY_TIMEOUT_MS,
+    JOB_TTL_DAYS,
     connect,
+    delete_job,
+    expire_stale_jobs,
     get_job,
     insert_job,
     list_applied_jobs,
@@ -764,5 +767,126 @@ def test_list_applied_jobs_only_returns_applied(tmp_path):
         applied = list_applied_jobs(conn)
         assert [row["id"] for row in applied] == [applied_id]
         assert pending_id not in [row["id"] for row in applied]
+    finally:
+        conn.close()
+
+
+def _backdate(conn, job_id, column, days_ago):
+    stamp = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+    with conn:
+        conn.execute(f"UPDATE jobs SET {column} = ? WHERE id = ?", (stamp, job_id))
+
+
+def test_expire_stale_jobs_deletes_a_pending_job_past_the_ttl(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        job_id = insert_job(conn, "raw text", JobExtraction(job_title="Stale Pending", is_agency_posting=False))
+        _backdate(conn, job_id, "created_at", JOB_TTL_DAYS + 1)
+
+        removed = expire_stale_jobs(conn)
+
+        assert removed == 1
+        assert get_job(conn, job_id) is None
+    finally:
+        conn.close()
+
+
+def test_expire_stale_jobs_keeps_a_pending_job_within_the_ttl(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        job_id = insert_job(conn, "raw text", JobExtraction(job_title="Fresh Pending", is_agency_posting=False))
+        _backdate(conn, job_id, "created_at", JOB_TTL_DAYS - 1)
+
+        removed = expire_stale_jobs(conn)
+
+        assert removed == 0
+        assert get_job(conn, job_id) is not None
+    finally:
+        conn.close()
+
+
+def test_expire_stale_jobs_keys_an_applied_job_off_applied_at_not_created_at(tmp_path):
+    # An old posting applied to recently must survive - applied_at, not the
+    # original created_at, is what should govern an applied job's clock.
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        job_id = insert_job(conn, "raw text", JobExtraction(job_title="Old Posting, Recent Apply", is_agency_posting=False))
+        _backdate(conn, job_id, "created_at", JOB_TTL_DAYS + 10)
+        mark_applied(conn, job_id)  # sets applied_at to now
+
+        removed = expire_stale_jobs(conn)
+
+        assert removed == 0
+        assert get_job(conn, job_id) is not None
+    finally:
+        conn.close()
+
+
+def test_expire_stale_jobs_deletes_an_applied_job_whose_applied_at_has_passed_the_ttl(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        job_id = insert_job(conn, "raw text", JobExtraction(job_title="Applied Long Ago", is_agency_posting=False))
+        mark_applied(conn, job_id)
+        _backdate(conn, job_id, "applied_at", JOB_TTL_DAYS + 1)
+
+        removed = expire_stale_jobs(conn)
+
+        assert removed == 1
+        assert get_job(conn, job_id) is None
+    finally:
+        conn.close()
+
+
+def test_expire_stale_jobs_treats_a_discovered_unreviewed_job_like_any_other_pending_job(tmp_path):
+    # No special-casing for source='indeed' - an unreviewed discovery-queue
+    # row has applied_at IS NULL just like a manually-pasted pending job, so
+    # it ages off created_at on the same 30-day clock, discovery_reviewed_at
+    # notwithstanding.
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        job_id = insert_job(
+            conn,
+            "raw text",
+            JobExtraction(job_title="Stale Discovery Candidate", is_agency_posting=False),
+            source="indeed",
+            source_job_id="indeed-stale-1",
+        )
+        _backdate(conn, job_id, "created_at", JOB_TTL_DAYS + 1)
+
+        removed = expire_stale_jobs(conn)
+
+        assert removed == 1
+        assert get_job(conn, job_id) is None
+    finally:
+        conn.close()
+
+
+def test_expire_stale_jobs_runs_automatically_on_connect(tmp_path):
+    db_path = tmp_path / "jobs.db"
+    conn = connect(db_path)
+    try:
+        job_id = insert_job(conn, "raw text", JobExtraction(job_title="Stale Pending", is_agency_posting=False))
+        _backdate(conn, job_id, "created_at", JOB_TTL_DAYS + 1)
+    finally:
+        conn.close()
+
+    # Reconnecting (as every CLI invocation and Streamlit rerun does) must
+    # sweep it without any separate manual trigger.
+    conn = connect(db_path)
+    try:
+        assert get_job(conn, job_id) is None
+    finally:
+        conn.close()
+
+
+def test_delete_job_removes_the_row(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        job_id = insert_job(conn, "raw text", JobExtraction(job_title="Rejected Application", is_agency_posting=False))
+        mark_applied(conn, job_id)
+
+        delete_job(conn, job_id)
+
+        assert get_job(conn, job_id) is None
     finally:
         conn.close()

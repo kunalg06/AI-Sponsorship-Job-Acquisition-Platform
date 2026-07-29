@@ -101,6 +101,44 @@ def _ensure_columns(conn: sqlite3.Connection, table: str, schema_sql: str) -> No
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
 
 
+JOB_TTL_DAYS = 30
+
+
+def expire_stale_jobs(conn: sqlite3.Connection, *, ttl_days: int = JOB_TTL_DAYS) -> int:
+    """Deletes any job whose relevant clock has run out: `applied_at` for an
+    applied job, `created_at` otherwise (covers pending and discarded rows
+    alike) - per the user's explicit decision that this pipeline is a
+    temporary working list, not a permanent archive. Runs on every
+    `connect()` so expiry needs no separate schedule or manual trigger.
+    Checks via a plain read first and only opens a write transaction when
+    something's actually due - `connect()` runs constantly (every CLI
+    invocation, every Streamlit rerun), so an unconditional DELETE would
+    contend for the write lock even in the overwhelmingly common case where
+    nothing has expired. Returns the number of rows removed."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=ttl_days)).isoformat()
+    stale = conn.execute(
+        "SELECT COUNT(*) AS c FROM jobs WHERE COALESCE(applied_at, created_at) < ?",
+        (cutoff,),
+    ).fetchone()["c"]
+    if not stale:
+        return 0
+    with conn:
+        cursor = conn.execute(
+            "DELETE FROM jobs WHERE COALESCE(applied_at, created_at) < ?",
+            (cutoff,),
+        )
+    return cursor.rowcount
+
+
+def delete_job(conn: sqlite3.Connection, job_id: int) -> None:
+    """Hard-deletes a single job row - e.g. the "Delete" action next to an
+    applied job once a rejection comes in. One denormalized table means this
+    also clears its reminder state in the same statement; there's no second
+    table to clean up."""
+    with conn:
+        conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+
+
 def connect(db_path: str | Path) -> sqlite3.Connection:
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -112,6 +150,7 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
     # feature only gets its source_job_id column via the ALTER TABLE above,
     # and this index can't be created against a column that doesn't exist yet.
     conn.executescript(CREATE_INDEXES)
+    expire_stale_jobs(conn)
     return conn
 
 
