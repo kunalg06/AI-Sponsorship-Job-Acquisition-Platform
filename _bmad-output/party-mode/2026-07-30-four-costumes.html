@@ -1,0 +1,356 @@
+<title>Four Costumes — Party Mode, 30 July 2026</title>
+<style>
+  :root{
+    --bg:#211a17; --bg2:#2b2320; --card:#312824; --line:#463932;
+    --ink:#f2e8d8; --dim:#b7a693; --faint:#8a7867;
+    --gold:#e0b071; --green:#8fbf7f; --red:#d98374; --blue:#89a9c7;
+    --serif:ui-serif,Georgia,"Iowan Old Style","Palatino Linotype",serif;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+    -webkit-font-smoothing:antialiased;overflow-x:hidden}
+  .wrap{max-width:820px;margin:0 auto;padding:0 22px 90px}
+  h1,h2,h3{font-family:var(--serif);font-weight:600;line-height:1.15;margin:0}
+  a{color:var(--gold)}
+  code,.mono{font-family:var(--mono);font-size:.87em}
+
+  /* ---------- hero ---------- */
+  .hero{position:relative;padding:86px 0 54px;text-align:center}
+  .hero .glow{position:absolute;inset:-40% 30% auto;height:340px;
+    background:radial-gradient(ellipse at 50% 0,rgba(224,176,113,.17),transparent 68%);
+    pointer-events:none}
+  .kicker{font-family:var(--mono);font-size:11.5px;letter-spacing:.24em;
+    text-transform:uppercase;color:var(--faint);margin-bottom:20px}
+  h1{font-size:clamp(2.6rem,8vw,4.4rem);letter-spacing:-.022em}
+  h1 em{font-style:italic;color:var(--gold)}
+  .dek{max-width:56ch;margin:22px auto 0;color:var(--dim);font-size:1.06rem}
+  .rule{width:56px;height:1px;background:var(--line);margin:38px auto 0}
+
+  /* ---------- section ---------- */
+  section{margin-top:74px}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.2em;
+    text-transform:uppercase;color:var(--faint);margin-bottom:14px}
+  h2{font-size:clamp(1.55rem,4.2vw,2.15rem);margin-bottom:14px}
+  .lede{color:var(--dim);max-width:62ch}
+
+  /* ---------- the bars ---------- */
+  .bars{margin-top:34px;background:var(--bg2);border:1px solid var(--line);
+    border-radius:14px;padding:30px 26px 26px}
+  .bar{margin-bottom:26px}
+  .bar:last-child{margin-bottom:0}
+  .bar .lab{display:flex;justify-content:space-between;align-items:baseline;
+    gap:12px;margin-bottom:9px;font-size:.9rem}
+  .bar .who{color:var(--ink)}
+  .bar .num{font-family:var(--mono);font-size:.85rem;color:var(--dim)}
+  .track{height:15px;background:#271f1c;border-radius:8px;overflow:hidden}
+  .fill{height:100%;border-radius:8px;transform-origin:left center;
+    animation:grow 1.5s cubic-bezier(.19,1,.22,1) both}
+  .fill.stub{width:7.4%;background:linear-gradient(90deg,#8f4b40,var(--red));animation-delay:.25s}
+  .fill.real{width:100%;background:linear-gradient(90deg,#5f7f53,var(--green));animation-delay:.55s}
+  @keyframes grow{from{transform:scaleX(.008);opacity:.35}to{transform:scaleX(1);opacity:1}}
+  .verdicts{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+    gap:12px;margin-top:28px;padding-top:24px;border-top:1px solid var(--line)}
+  .v{background:var(--card);border-radius:10px;padding:13px 15px}
+  .v b{display:block;font-family:var(--mono);font-size:.76rem;letter-spacing:.06em;
+    color:var(--faint);text-transform:uppercase;margin-bottom:5px;font-weight:400}
+  .v span{font-size:.92rem}
+  .strike{color:var(--red);text-decoration:line-through;text-decoration-thickness:1px}
+
+  /* ---------- costumes ---------- */
+  ol.costumes{list-style:none;margin:34px 0 0;padding:0;counter-reset:c}
+  ol.costumes li{counter-increment:c;position:relative;padding:0 0 26px 62px;
+    border-left:1px solid var(--line);margin-left:17px}
+  ol.costumes li:last-child{border-left-color:transparent;padding-bottom:0}
+  ol.costumes li::before{content:counter(c);position:absolute;left:-17px;top:-2px;
+    width:34px;height:34px;border-radius:50%;background:var(--card);
+    border:1px solid var(--line);color:var(--gold);font-family:var(--mono);
+    font-size:.82rem;display:grid;place-items:center}
+  ol.costumes h3{font-size:1.07rem;margin-bottom:5px}
+  ol.costumes p{margin:0;color:var(--dim);font-size:.95rem}
+
+  /* ---------- voices ---------- */
+  .voices{display:grid;gap:14px;margin-top:32px}
+  .voice{display:grid;grid-template-columns:auto 1fr;gap:16px;
+    background:var(--bg2);border:1px solid var(--line);border-left:2px solid var(--line);
+    border-radius:12px;padding:19px 21px}
+  .voice .ico{font-size:1.6rem;line-height:1;filter:saturate(.9)}
+  .voice .nm{font-family:var(--serif);font-size:1.02rem;margin-bottom:2px}
+  .voice .rl{font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;
+    text-transform:uppercase;color:var(--faint);margin-bottom:10px}
+  .voice q{display:block;font-family:var(--serif);font-size:1.09rem;
+    font-style:italic;color:var(--ink);quotes:none;line-height:1.5}
+  .voice .aft{margin:9px 0 0;font-size:.86rem;color:var(--faint)}
+  .voice.gold{border-left-color:var(--gold)}
+  .voice.green{border-left-color:var(--green)}
+  .voice.red{border-left-color:var(--red)}
+  .voice.blue{border-left-color:var(--blue)}
+
+  /* ---------- payoff ---------- */
+  .payoff{margin-top:74px;position:relative;text-align:center;
+    background:linear-gradient(165deg,#33291f,#241d19);
+    border:1px solid #5c4a33;border-radius:18px;padding:52px 30px 46px;overflow:hidden}
+  .payoff .spark{position:absolute;inset:auto 0 -60% 0;height:220px;
+    background:radial-gradient(ellipse at 50% 100%,rgba(224,176,113,.19),transparent 70%)}
+  .payoff .score{font-family:var(--mono);font-size:.8rem;letter-spacing:.2em;
+    color:var(--gold);text-transform:uppercase}
+  .payoff h2{margin:16px 0 6px;font-size:clamp(1.6rem,5vw,2.3rem)}
+  .payoff .co{font-family:var(--serif);font-size:1.16rem;color:var(--dim);font-style:italic}
+  .payoff .meta{margin-top:26px;padding-top:22px;border-top:1px solid #5c4a33;
+    font-size:.88rem;color:var(--faint);max-width:46ch;margin-left:auto;margin-right:auto}
+  .ring{display:block;margin:0 auto 6px}
+  .ring circle{fill:none;stroke-width:6;stroke-linecap:round}
+  .ring .bg{stroke:#4a3b2a}
+  .ring .fg{stroke:var(--gold);stroke-dasharray:264;stroke-dashoffset:264;
+    animation:fill92 1.9s cubic-bezier(.19,1,.22,1) .5s both;
+    transform:rotate(-90deg);transform-origin:50% 50%}
+  @keyframes fill92{to{stroke-dashoffset:21}}
+  .ring text{fill:var(--ink);font-family:var(--mono);font-size:26px;
+    text-anchor:middle;dominant-baseline:central}
+
+  /* ---------- ledger ---------- */
+  table{width:100%;border-collapse:collapse;margin-top:26px;font-size:.92rem}
+  th,td{text-align:left;padding:11px 12px;border-bottom:1px solid var(--line);
+    vertical-align:top}
+  th{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--faint);font-weight:400}
+  td.k{color:var(--dim);white-space:nowrap}
+  .tick{color:var(--green)}
+  .scroller{overflow-x:auto}
+
+  footer{margin-top:76px;padding-top:26px;border-top:1px solid var(--line);
+    text-align:center;color:var(--faint);font-size:.82rem}
+  footer .sha{font-family:var(--mono);color:var(--dim)}
+
+  .reveal{animation:up .8s cubic-bezier(.19,1,.22,1) both}
+  @keyframes up{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+  @media (prefers-reduced-motion:reduce){
+    *{animation:none!important}
+    .fill.stub{width:7.4%}.fill.real{width:100%}
+    .ring .fg{stroke-dashoffset:21}
+  }
+</style>
+
+<div class="hero">
+  <div class="glow"></div>
+  <div class="wrap">
+    <div class="kicker">Party Mode &middot; 30 July 2026</div>
+    <h1>Four <em>Costumes</em></h1>
+    <p class="dek">The night a job-discovery routine failed four different ways,
+      and every failure turned out to be the same four hundred characters
+      wearing a new disguise.</p>
+    <div class="rule"></div>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <section class="reveal">
+    <div class="eyebrow">The reveal</div>
+    <h2>633 against 8,500</h2>
+    <p class="lede">Fourteen postings had been staged into the pipeline overnight. Every
+      one scored <span class="mono">0/100</span>. Every one said no salary stated. It
+      looked like fourteen bad jobs. One <span class="mono">LENGTH(raw_text)</span>
+      query said otherwise.</p>
+
+    <div class="bars">
+      <div class="bar">
+        <div class="lab">
+          <span class="who">What we stored &mdash; <span class="mono">Applied AI Solution Engineer @ At Beyond</span></span>
+          <span class="num">633 chars</span>
+        </div>
+        <div class="track"><div class="fill stub"></div></div>
+      </div>
+      <div class="bar">
+        <div class="lab">
+          <span class="who">What Indeed actually returned &mdash; <span class="mono">the same posting</span></span>
+          <span class="num">~8,500 chars</span>
+        </div>
+        <div class="track"><div class="fill real"></div></div>
+      </div>
+
+      <div class="verdicts">
+        <div class="v"><b>Salary</b><span class="strike">NO_SALARY_STATED</span></div>
+        <div class="v"><b>Actually in the text</b><span>£45,000&ndash;£60,000</span></div>
+        <div class="v"><b>Match</b><span class="strike">0 / 100</span></div>
+        <div class="v"><b>Wanted</b><span>Python, SQL, RAG, agents</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <div class="eyebrow">One bug</div>
+    <h2>The costumes, in order</h2>
+    <ol class="costumes">
+      <li>
+        <h3>A rate limit</h3>
+        <p>Indeed throttled the run. Real, but a symptom &mdash; the routine was
+          re-fetching details for jobs it had already staged.</p>
+      </li>
+      <li>
+        <h3>An improvisation</h3>
+        <p>Blocked, the agent wrote itself a recovery script that condensed every
+          description into an intermediate file. That is where the text died.</p>
+      </li>
+      <li>
+        <h3>Fourteen confident zeros</h3>
+        <p>The scorer did its job perfectly on nothing at all. Absence of
+          information rendered as a verdict.</p>
+      </li>
+      <li>
+        <h3>A very nearly irreversible delete</h3>
+        <p>Which almost became a rule that auto-deleted every job scoring under 85
+          &mdash; on a database with one copy and no backup.</p>
+      </li>
+    </ol>
+  </section>
+
+  <section class="reveal">
+    <div class="eyebrow">The room</div>
+    <h2>Who said what</h2>
+
+    <div class="voices">
+      <div class="voice green">
+        <div class="ico">&#128187;</div>
+        <div>
+          <div class="nm">Amelia</div>
+          <div class="rl">Senior Software Engineer</div>
+          <q>Every Indeed row: 339 to 633 characters. Every manual row: 3,810 to 7,367.</q>
+          <p class="aft">Put the query on the table instead of arguing. Ended the debate in one paste.</p>
+        </div>
+      </div>
+
+      <div class="voice">
+        <div class="ico">&#129514;</div>
+        <div>
+          <div class="nm">Murat</div>
+          <div class="rl">Test Architect</div>
+          <q>You were right, and it&rsquo;s now a finding.</q>
+          <p class="aft">Refused the hypothesis until two API calls proved it. Then said so out loud.</p>
+        </div>
+      </div>
+
+      <div class="voice gold">
+        <div class="ico">&#127959;</div>
+        <div>
+          <div class="nm">Winston</div>
+          <div class="rl">System Architect</div>
+          <q>Cheap and load-bearing over gorgeous and imaginary.</q>
+          <p class="aft">Third session running. Killed a fourteen-site expansion with one old sentence.</p>
+        </div>
+      </div>
+
+      <div class="voice blue">
+        <div class="ico">&#128202;</div>
+        <div>
+          <div class="nm">Mary</div>
+          <div class="rl">Business Analyst</div>
+          <q>One. n = 1. You&rsquo;re not validating the threshold, you&rsquo;re anchoring on your single success.</q>
+          <p class="aft">Silent all session, then produced her own objection quoted verbatim from the spec.</p>
+        </div>
+      </div>
+
+      <div class="voice red">
+        <div class="ico">&#128203;</div>
+        <div>
+          <div class="nm">John</div>
+          <div class="rl">Product Manager</div>
+          <q>Automating submit-clicks risks bot-detection bans on your own accounts. You click submit.</q>
+          <p class="aft">Not flexible on it. Turned out to be a typo anyway.</p>
+        </div>
+      </div>
+
+      <div class="voice">
+        <div class="ico">&#9889;</div>
+        <div>
+          <div class="nm">Victor</div>
+          <div class="rl">Innovation Strategist</div>
+          <q>Even if it were safe, I&rsquo;d argue against it.</q>
+          <p class="aft">Volunteered as the dissent, then dissented against the thing everyone already opposed.</p>
+        </div>
+      </div>
+
+      <div class="voice gold">
+        <div class="ico">&#128300;</div>
+        <div>
+          <div class="nm">Dr. Quinn</div>
+          <div class="rl">Master Problem Solver</div>
+          <q>The rate limit was never the disease. It was the fever.</q>
+          <p class="aft">Named the root cause once, after the room had found it four times.</p>
+        </div>
+      </div>
+
+      <div class="voice green">
+        <div class="ico">&#127912;</div>
+        <div>
+          <div class="nm">Sally</div>
+          <div class="rl">UX Designer</div>
+          <q>The one page you triage from is the one page that hides the evidence.</q>
+          <p class="aft">Conceded her own earlier argument the moment the data turned against it.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="payoff reveal">
+    <div class="spark"></div>
+    <div class="score">Yesterday &middot; the pipeline&rsquo;s first result</div>
+    <svg class="ring" width="112" height="112" viewBox="0 0 112 112" role="img"
+         aria-label="Match score 92 out of 100">
+      <circle class="bg" cx="56" cy="56" r="42"/>
+      <circle class="fg" cx="56" cy="56" r="42"/>
+      <text x="56" y="57">92</text>
+    </svg>
+    <h2>Interview.</h2>
+    <p class="co">Applied AI Engineer &mdash; Agentic Systems, Senior Associate</p>
+    <p class="co">JPMorganChase</p>
+    <div class="meta">
+      One posting. Scored 92. Applied to by hand.<br>
+      Not the volume &mdash; and very nearly deleted by a filter
+      built on a broken signal.
+    </div>
+  </div>
+
+  <section class="reveal">
+    <div class="eyebrow">What changed</div>
+    <h2>The ledger</h2>
+    <div class="scroller">
+      <table>
+        <tr><th>Then</th><th>Now</th></tr>
+        <tr>
+          <td class="k">16 keywords, 32 searches a day</td>
+          <td><span class="tick">&check;</span> 6 titles from your own Indeed preferences &mdash; 12 searches</td>
+        </tr>
+        <tr>
+          <td class="k">Details re-fetched for jobs already staged</td>
+          <td><span class="tick">&check;</span> Local pre-filter first, costs no quota</td>
+        </tr>
+        <tr>
+          <td class="k">Descriptions condensed to ~400 chars</td>
+          <td><span class="tick">&check;</span> Verbatim text, with a 1,000-char floor that halts</td>
+        </tr>
+        <tr>
+          <td class="k">Rate limit &rarr; improvise a workaround</td>
+          <td><span class="tick">&check;</span> Stage what&rsquo;s complete, stop, report</td>
+        </tr>
+        <tr>
+          <td class="k">Auto-delete below threshold</td>
+          <td><span class="tick">&check;</span> Dry-run by default, discard not delete, unscored never touched</td>
+        </tr>
+        <tr>
+          <td class="k">A bare integer on the triage page</td>
+          <td><span class="tick">&check;</span> Has / Missing / reasoning &mdash; and a warning when there&rsquo;s no detail at all</td>
+        </tr>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    <p><span class="sha">3521547</span> &nbsp;triage command + match evidence on Automate &nbsp;&middot;&nbsp;
+       <span class="sha">990d57e</span> &nbsp;session log &nbsp;&middot;&nbsp; 415 tests passing</p>
+    <p>Kunal caught the fourth costume himself.<br>
+       <em>Good luck next week.</em></p>
+  </footer>
+
+</div>
