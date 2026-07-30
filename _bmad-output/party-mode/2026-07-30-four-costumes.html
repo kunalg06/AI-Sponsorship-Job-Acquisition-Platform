@@ -99,6 +99,18 @@
   .payoff .co{font-family:var(--serif);font-size:1.16rem;color:var(--dim);font-style:italic}
   .payoff .meta{margin-top:26px;padding-top:22px;border-top:1px solid #5c4a33;
     font-size:.88rem;color:var(--faint);max-width:46ch;margin-left:auto;margin-right:auto}
+  .chain-lead{margin:30px 0 0;font-size:.88rem;color:var(--dim)}
+  ol.chain{list-style:none;counter-reset:s;margin:18px auto 0;padding:0;
+    max-width:400px;text-align:left}
+  ol.chain li{counter-increment:s;position:relative;padding:7px 0 7px 40px;
+    font-size:.93rem;color:var(--dim)}
+  ol.chain li b{color:var(--ink);font-weight:600}
+  ol.chain li::before{content:counter(s);position:absolute;left:0;top:6px;
+    width:24px;height:24px;border-radius:50%;background:rgba(224,176,113,.13);
+    border:1px solid #5c4a33;color:var(--gold);font-family:var(--mono);
+    font-size:.72rem;display:grid;place-items:center}
+  ol.chain li:not(:last-child)::after{content:"";position:absolute;left:11.5px;
+    top:30px;height:calc(100% - 24px);width:1px;background:#5c4a33}
   .ring{display:block;margin:0 auto 6px}
   .ring circle{fill:none;stroke-width:6;stroke-linecap:round}
   .ring .bg{stroke:#4a3b2a}
@@ -305,10 +317,20 @@
     <h2>Interview.</h2>
     <p class="co">Applied AI Engineer &mdash; Agentic Systems, Senior Associate</p>
     <p class="co">JPMorganChase</p>
+    <p class="chain-lead">Not luck, and not the volume. The whole pipeline, end to end:</p>
+    <ol class="chain">
+      <li><b>You</b> pasted the JD</li>
+      <li><b>Sponsor check</b> against the register</li>
+      <li><b>Match score</b> &mdash; 92, strong_match</li>
+      <li><b>Resume</b> tailored, formatting preserved</li>
+      <li><b>Cover letter</b> drafted from your narrative core</li>
+      <li><b>You</b> read it, judged it, pressed submit</li>
+    </ol>
     <div class="meta">
-      One posting. Scored 92. Applied to by hand.<br>
-      Not the volume &mdash; and very nearly deleted by a filter
-      built on a broken signal.
+      The human step was never meant to be the <em>work</em> &mdash; only the
+      irreversible click. That is the design holding exactly as written.<br><br>
+      And a filter built on a broken signal came within one decision
+      of deleting this row before anyone saw it.
     </div>
   </div>
 
