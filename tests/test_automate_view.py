@@ -157,3 +157,81 @@ def test_multiple_unreviewed_rows_shows_the_correct_count_caption(streamlit_data
     assert not at.exception
     captions = [c.value for c in at.caption]
     assert any("2 shown now" in c for c in captions)
+
+
+def test_automate_page_shows_missing_and_matched_skills_so_a_low_score_is_auditable(streamlit_data_env):
+    """The score alone is not a verdict the user can check. This page is where
+    triage happens, so the evidence behind the number has to be visible here -
+    not only on Jobs List."""
+    jobs_db_path = streamlit_data_env["jobs_db"]
+    job_id = _stage_indeed_row(jobs_db_path)
+    conn = connect_jobs(jobs_db_path)
+    try:
+        update_match_verdict(
+            conn,
+            job_id,
+            score=48,
+            verdict="weak_match",
+            matched_skills=["Python", "SQL"],
+            missing_skills=["Kubernetes", "Terraform"],
+            reasoning="Strong Python overlap but no infrastructure experience shown.",
+        )
+    finally:
+        conn.close()
+
+    at = AppTest.from_file(AUTOMATE_PY)
+    at.run()
+
+    assert not at.exception
+    markdown_text = " ".join(m.value for m in at.markdown)
+    assert "48/100" in markdown_text
+    assert "Kubernetes" in markdown_text
+    assert "Terraform" in markdown_text
+    assert "Python" in markdown_text
+    captions = " ".join(c.value for c in at.caption)
+    assert "no infrastructure experience shown" in captions
+
+
+def test_automate_page_flags_a_score_that_has_no_supporting_detail_at_all(streamlit_data_env):
+    """A score with empty skills lists and empty reasoning is what a truncated
+    description produces - it must be called out as unverified rather than
+    rendered as a confident verdict, which is how a whole queue of bogus 0/100s
+    went unnoticed for a day."""
+    jobs_db_path = streamlit_data_env["jobs_db"]
+    job_id = _stage_indeed_row(jobs_db_path)
+    conn = connect_jobs(jobs_db_path)
+    try:
+        update_match_verdict(
+            conn, job_id, score=0, verdict="weak_match", matched_skills=[], missing_skills=[], reasoning=""
+        )
+    finally:
+        conn.close()
+
+    at = AppTest.from_file(AUTOMATE_PY)
+    at.run()
+
+    assert not at.exception
+    captions = " ".join(c.value for c in at.caption).lower()
+    assert "unverified" in captions
+
+
+def test_automate_page_survives_malformed_skills_json_without_crashing(streamlit_data_env):
+    """A review queue must still render every other field of a row even if one
+    column is unreadable."""
+    jobs_db_path = streamlit_data_env["jobs_db"]
+    job_id = _stage_indeed_row(jobs_db_path)
+    conn = connect_jobs(jobs_db_path)
+    try:
+        update_match_verdict(
+            conn, job_id, score=70, verdict="strong_match", matched_skills=[], missing_skills=[], reasoning="ok"
+        )
+        with conn:
+            conn.execute("UPDATE jobs SET match_missing_skills = ? WHERE id = ?", ("{not json", job_id))
+    finally:
+        conn.close()
+
+    at = AppTest.from_file(AUTOMATE_PY)
+    at.run()
+
+    assert not at.exception
+    assert "70/100" in " ".join(m.value for m in at.markdown)

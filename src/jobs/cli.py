@@ -25,6 +25,7 @@ from jobs.db import (
     get_job,
     insert_job,
     list_applied_jobs,
+    list_discovery_queue,
     list_job_ids_and_company_names,
     list_jobs,
     list_legacy_tailored_rows,
@@ -48,7 +49,15 @@ from jobs.docx_tailor import (
     write_plain_docx,
 )
 from jobs.extract import JobExtraction, extract_job
-from jobs.match_score import MATCH_THRESHOLD, STRONG_MATCH, WEAK_MATCH, match_verdict, score_job_match
+from jobs.match_score import (
+    DISCOVERY_TRIAGE_THRESHOLD,
+    MATCH_THRESHOLD,
+    STRONG_MATCH,
+    WEAK_MATCH,
+    match_verdict,
+    partition_discovery_queue,
+    score_job_match,
+)
 from jobs.outreach import EMAIL, LINKEDIN_NOTE, OutreachLengthError, draft_outreach_message
 from jobs.outreach_db import (
     ensure_schema as ensure_outreach_schema,
@@ -1102,6 +1111,66 @@ def _cmd_discard(args: argparse.Namespace) -> None:
         conn.close()
 
 
+def _cmd_triage_discovery(args: argparse.Namespace) -> None:
+    """Bulk-triages the Indeed discovery queue against a match-score threshold:
+    discards what scores below it, and names what scores at or above it as
+    ready to tailor.
+
+    Dry-run by default (`--apply` commits) because this is the one command in
+    the pipeline that acts on a batch of rows without the human seeing each
+    one, and the threshold it acts on has exactly one real outcome behind it
+    so far. Preview, eyeball, then commit.
+
+    Discards rather than deletes: `mark_discarded` sets `applied_status`, which
+    drops the row out of `list_discovery_queue` (the Automate page) while
+    leaving it readable under the Jobs List page's "Discarded" filter. A wrong
+    threshold therefore costs a WHERE clause, not data - which matters more
+    than usual here, since `data/*.db` has no backup (see project-context.md).
+
+    Tailoring is printed as a ready-to-run command rather than invoked: it is
+    an LLM call plus a docx write per job, and `tailor-docx` already holds a
+    per-job advisory lock precisely because concurrent runs race each other.
+    Firing a batch of those unattended from inside a triage loop is a
+    different feature with a different failure mode; keep it a human step."""
+    conn = connect(args.db)
+    try:
+        queue = list_discovery_queue(conn, limit=args.limit)
+        if not queue:
+            print("Discovery queue is empty - nothing to triage.")
+            return
+        keep, discard, unscored = partition_discovery_queue(queue, args.threshold)
+        verb = "Discarding" if args.apply else "Would discard"
+        print(f"Discovery queue: {len(queue)} unreviewed candidate(s), threshold {args.threshold}/100\n")
+
+        if keep:
+            print(f"KEEP - scored >= {args.threshold} ({len(keep)}), tailor these:")
+            for row in keep:
+                print(f"  #{row['id']:>4} {row['match_score']:>3}/100  {row['job_title']} @ {row['company_name'] or '-'}")
+                print(f"         uv run python -m jobs.cli tailor-docx {row['id']}")
+            print()
+
+        if discard:
+            print(f"{verb} - scored < {args.threshold} ({len(discard)}):")
+            for row in discard:
+                print(f"  #{row['id']:>4} {row['match_score']:>3}/100  {row['job_title']} @ {row['company_name'] or '-'}")
+                if args.apply:
+                    mark_discarded(conn, row["id"])
+            print()
+
+        if unscored:
+            print(f"LEFT IN QUEUE - never scored, no resume on file at staging time ({len(unscored)}):")
+            for row in unscored:
+                print(f"  #{row['id']:>4}   -/100  {row['job_title']} @ {row['company_name'] or '-'}")
+            print("  (an unscored row is unjudged, not rejected - re-run `match-score <id>` to score it)\n")
+
+        if not args.apply and discard:
+            print("Dry run - nothing changed. Re-run with --apply to discard the rows listed above.")
+
+
+    finally:
+        conn.close()
+
+
 def _format_due_reminder_line(r: DueReminder) -> str:
     return (
         f"#{r.job_id:>4}  {r.job_title:<40} {r.company_name or '-':<30} "
@@ -1464,6 +1533,28 @@ def build_parser() -> argparse.ArgumentParser:
     discard_parser.add_argument("job_id", type=int)
     discard_parser.add_argument("--db", default=DEFAULT_DB, help="Jobs SQLite db path")
     discard_parser.set_defaults(func=_cmd_discard)
+
+    triage_parser = subparsers.add_parser(
+        "triage-discovery",
+        help=(
+            "Bulk-triage the Indeed discovery queue by match score: discard below the "
+            "threshold, list what's ready to tailor above it (dry-run unless --apply)"
+        ),
+    )
+    triage_parser.add_argument(
+        "--threshold",
+        type=int,
+        default=DISCOVERY_TRIAGE_THRESHOLD,
+        help=f"Match score at or above which a candidate is kept (default {DISCOVERY_TRIAGE_THRESHOLD})",
+    )
+    triage_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Actually discard the below-threshold rows (without this, only prints what would change)",
+    )
+    triage_parser.add_argument("--limit", type=int, default=20, help="How many queue rows to consider")
+    triage_parser.add_argument("--db", default=DEFAULT_DB, help="Jobs SQLite db path")
+    triage_parser.set_defaults(func=_cmd_triage_discovery)
 
     due_parser = subparsers.add_parser("due", help="List applied jobs with a day 3/7/14 follow-up due")
     due_parser.add_argument("--db", default=DEFAULT_DB, help="Jobs SQLite db path")

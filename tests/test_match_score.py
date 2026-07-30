@@ -5,11 +5,13 @@ import pytest
 from google.genai._gaos.lib import compat_errors
 
 from jobs.match_score import (
+    DISCOVERY_TRIAGE_THRESHOLD,
     MATCH_THRESHOLD,
     STRONG_MATCH,
     WEAK_MATCH,
     MatchScore,
     match_verdict,
+    partition_discovery_queue,
     score_job_match,
 )
 from resume.extract import ResumeProfile
@@ -63,3 +65,45 @@ def test_match_verdict_threshold_boundaries():
     assert match_verdict(MATCH_THRESHOLD + 1) == STRONG_MATCH
     assert match_verdict(MATCH_THRESHOLD - 1) == WEAK_MATCH
     assert match_verdict(0) == WEAK_MATCH
+
+
+def _row(job_id: int, score):
+    return {"id": job_id, "match_score": score, "job_title": f"Job {job_id}", "company_name": "Acme"}
+
+
+def test_partition_discovery_queue_keeps_scores_at_and_above_the_threshold():
+    keep, discard, unscored = partition_discovery_queue(
+        [_row(1, 92), _row(2, 85), _row(3, 84)], threshold=85
+    )
+    assert [r["id"] for r in keep] == [1, 2]
+    assert [r["id"] for r in discard] == [3]
+    assert unscored == []
+
+
+def test_partition_discovery_queue_never_discards_an_unscored_row():
+    """A NULL match_score means scoring was skipped (no resume on file), not
+    that the job scored badly - discarding those would throw away rows nobody
+    has actually judged."""
+    keep, discard, unscored = partition_discovery_queue([_row(1, None), _row(2, 10)], threshold=85)
+    assert keep == []
+    assert [r["id"] for r in discard] == [2]
+    assert [r["id"] for r in unscored] == [1]
+
+
+def test_partition_discovery_queue_treats_zero_as_a_real_score_not_a_missing_one():
+    """0/100 is a verdict, unlike NULL - the truncated-description incident
+    produced a queue full of genuine-looking 0s, so the two must not collapse."""
+    _, discard, unscored = partition_discovery_queue([_row(1, 0)], threshold=85)
+    assert [r["id"] for r in discard] == [1]
+    assert unscored == []
+
+
+def test_partition_discovery_queue_handles_an_empty_queue():
+    assert partition_discovery_queue([], threshold=85) == ([], [], [])
+
+
+def test_discovery_triage_threshold_is_stricter_than_the_advisory_match_threshold():
+    """85 is the act-on-its-own line; 70 is the advisory 'worth tailoring' line
+    shown in the UI. Collapsing them would make the queue auto-discard rows the
+    UI still calls a strong match."""
+    assert DISCOVERY_TRIAGE_THRESHOLD > MATCH_THRESHOLD

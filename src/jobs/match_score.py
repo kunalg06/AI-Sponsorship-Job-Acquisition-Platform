@@ -77,3 +77,43 @@ def score_job_match(
 
 def match_verdict(score: int) -> str:
     return STRONG_MATCH if score >= MATCH_THRESHOLD else WEAK_MATCH
+
+
+# Deliberately higher than MATCH_THRESHOLD (70) and deliberately a separate
+# constant: 70 is the "is this worth tailoring for" advisory line shown in the
+# UI, whereas this is the line at which the discovery queue *acts on its own*
+# and discards a row. The user set 85 after the first real outcome (a 92-scored
+# job converted to an interview); spec-indeed-job-discovery.md's Design Notes
+# had previously resolved this question the other way ("show all... rather than
+# hard-filtering at an unvalidated 85"), so this constant is the one place that
+# reversal lives - change it here, not at a call site.
+DISCOVERY_TRIAGE_THRESHOLD = 85
+
+
+def partition_discovery_queue(
+    rows: list, threshold: int = DISCOVERY_TRIAGE_THRESHOLD
+) -> tuple[list, list, list]:
+    """Splits a discovery queue into (keep, discard, unscored) by match score.
+
+    Pure - no DB writes, no I/O - so the threshold policy is testable without
+    a database and so callers can preview the split before committing to it
+    (`jobs triage-discovery` defaults to exactly that dry run).
+
+    `unscored` is its own bucket rather than being folded into `discard`, and
+    that distinction is the whole point of this function: `match_score` is
+    NULL whenever scoring was skipped (no resume on file at staging time - see
+    `_run_match_score`) and a NULL is an *absence of information*, not a low
+    score. Discarding those would silently throw away rows nobody has actually
+    judged - the same failure mode that made a truncated-description run look
+    like fourteen genuine rejections. Unscored rows stay in the queue for the
+    human, matching this codebase's `CANNOT_VERIFY`-over-a-guess convention."""
+    keep, discard, unscored = [], [], []
+    for row in rows:
+        score = row["match_score"]
+        if score is None:
+            unscored.append(row)
+        elif score >= threshold:
+            keep.append(row)
+        else:
+            discard.append(row)
+    return keep, discard, unscored

@@ -15,6 +15,8 @@ application on the user's behalf.
 
 from __future__ import annotations
 
+import json
+
 import streamlit as st
 
 from jobs.db import connect as connect_jobs
@@ -36,6 +38,23 @@ STATUS_COLOR = {
     CANNOT_VERIFY: "gray",
     SKIPPED: "blue",
 }
+
+
+def _skill_list(raw) -> list[str]:
+    """`match_matched_skills`/`match_missing_skills` are stored as JSON text
+    (`update_match_verdict` json.dumps them), so they need decoding before
+    display. Returns [] for NULL, empty text, or malformed JSON rather than
+    raising: a review queue must still render every other field of a row even
+    if this one column is unreadable, and an unparseable skills list is
+    exactly the kind of thing that should degrade quietly to "no detail
+    shown" instead of taking the whole page down."""
+    if not raw:
+        return []
+    try:
+        decoded = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    return [str(s) for s in decoded] if isinstance(decoded, list) else []
 
 set_page_wonk("low")  # a review queue is a working table, same register as Jobs List
 st.title("\U0001f916 Automate")
@@ -83,6 +102,29 @@ else:
                 st.markdown(f"**Salary check:** {job['salary_status'].upper()} — {job['salary_reason'] or ''}")
             if job["match_score"] is not None:
                 st.markdown(f"**Match:** {job['match_score']}/100 ({job['match_verdict'] or '-'})")
+                # The score alone is not an auditable verdict, and this is the
+                # page the user triages from - so the evidence behind it is
+                # shown here rather than only on Jobs List. A run that staged
+                # truncated descriptions produced a queue of confident-looking
+                # 0/100s whose reasoning and skills lists were empty; had they
+                # been rendered, the bug would have been obvious on sight
+                # instead of needing a raw_text length query to find. Also note
+                # the scorer never distinguishes required from nice-to-have
+                # (see match_score.py's system instruction), so a low score
+                # needs its missing_skills visible before it's acted on.
+                missing = _skill_list(job["match_missing_skills"])
+                matched = _skill_list(job["match_matched_skills"])
+                if matched:
+                    st.markdown(f"**Has:** {', '.join(matched)}")
+                if missing:
+                    st.markdown(f"**Missing:** {', '.join(missing)}")
+                if job["match_reasoning"]:
+                    st.caption(job["match_reasoning"])
+                if not matched and not missing and not job["match_reasoning"]:
+                    st.caption(
+                        ":orange[No scoring detail was recorded for this row - treat the score "
+                        "above as unverified and check the posting yourself before acting on it.]"
+                    )
             else:
                 st.caption("Match score unavailable - no resume was on file yet when this was staged.")
 
