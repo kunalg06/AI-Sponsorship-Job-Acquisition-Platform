@@ -76,10 +76,23 @@ def test_cancel_button_clears_pending_cv_profile_through_the_real_dialog(streaml
     # regression).
     conn = connect_profile(streamlit_data_env["profile_db"])
     try:
+        # Must be a *usable* profile (non-empty core_skills): the supersede
+        # dialog under test only opens when there is a current profile to
+        # supersede, and resume.db treats a skill-less row as no profile at
+        # all. Seeding one here used to be enough, and a copy of exactly that
+        # placeholder row leaking into the production db is what silently
+        # zeroed 86 match scores - see get_latest_profile's docstring.
         insert_profile(
             conn,
             "current resume text",
-            ResumeProfile(seniority="senior", core_skills=[], domains=[], past_roles=[], summary="current"),
+            ResumeProfile(
+                full_name="Current Candidate",
+                seniority="senior",
+                core_skills=["Python"],
+                domains=["Machine Learning"],
+                past_roles=["ML Engineer"],
+                summary="current",
+            ),
         )
     finally:
         conn.close()

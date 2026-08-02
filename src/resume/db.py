@@ -70,8 +70,38 @@ def insert_profile(conn: sqlite3.Connection, raw_resume_text: str, profile: Resu
     return cursor.lastrowid
 
 
+# A profile row is only a candidate for "the current CV" if extraction actually
+# got skills out of it. Both readers below share this predicate so they can
+# never disagree about which row is current - one answering with the real
+# resume while the other answers with a placeholder is how you get a tailored
+# CV built from the wrong document.
+_USABLE_PROFILE = "core_skills NOT IN ('[]', '') AND core_skills IS NOT NULL"
+
+
 def get_latest_profile(conn: sqlite3.Connection) -> Optional[ResumeProfile]:
-    row = conn.execute("SELECT * FROM profiles ORDER BY id DESC LIMIT 1").fetchone()
+    """The most recent *usable* profile, skipping ones with no core_skills.
+
+    The skip is the whole point. A profile row with `core_skills = []` carries
+    no signal for match scoring, but it is not inert: jobs.match_score feeds it
+    to the LLM, which then correctly scores a blank candidate 0/100 against
+    every job. That failure is silent - no error, no NULL, just a wall of
+    plausible-looking zeros that reads as "you match nothing" rather than "the
+    profile is empty". It happened for real: a test wrote a placeholder row
+    (raw_resume_text='current resume text') into the production profile db on
+    2026-07-29, and because this query was ORDER BY id DESC it won over the
+    real resume and zeroed 86 jobs before anyone noticed.
+
+    Fixing the row that caused it is not enough - any future stray insert
+    re-arms the same trap - so the guard lives here, at the read. If *every*
+    profile is empty we return None, which callers already handle by skipping
+    scoring and leaving match_score NULL; per
+    jobs.match_score.partition_discovery_queue a NULL is an absence of
+    information and keeps the row in the queue for a human, whereas a 0 is a
+    verdict that silently discards it.
+    """
+    row = conn.execute(
+        f"SELECT * FROM profiles WHERE {_USABLE_PROFILE} ORDER BY id DESC LIMIT 1"
+    ).fetchone()
     if row is None:
         return None
     return ResumeProfile(
@@ -86,7 +116,15 @@ def get_latest_profile(conn: sqlite3.Connection) -> Optional[ResumeProfile]:
 
 
 def get_latest_raw_resume_text(conn: sqlite3.Connection) -> Optional[str]:
-    row = conn.execute("SELECT raw_resume_text FROM profiles ORDER BY id DESC LIMIT 1").fetchone()
+    """Raw text of the same row get_latest_profile() would return.
+
+    Skips skill-less rows for the same reason - jobs.cli feeds this straight
+    into resume/cover-letter tailoring, so a placeholder row winning here means
+    generating an application from text like 'current resume text'.
+    """
+    row = conn.execute(
+        f"SELECT raw_resume_text FROM profiles WHERE {_USABLE_PROFILE} ORDER BY id DESC LIMIT 1"
+    ).fetchone()
     return row["raw_resume_text"] if row else None
 
 

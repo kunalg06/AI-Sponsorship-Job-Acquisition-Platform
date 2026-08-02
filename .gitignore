@@ -16,6 +16,10 @@ data/*.pre-turso-backup
 # than deleted) - same personal data as data/*.db above under a filename
 # none of the patterns above match.
 data/*.corrupt-backup-*
+# Pre-ingest rescue copies. dbcompat.connect() syncs the embedded replica from
+# the remote on open, so a remote that is empty/stale silently overwrites a
+# good local register - copy it aside under this name before any ingest run.
+data/*.rescue-*
 data/tailored/
 
 # Personal resume/CV content and generated per-company tailored output

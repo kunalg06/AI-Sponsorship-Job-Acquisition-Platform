@@ -61,6 +61,17 @@ OVERRIDE_STATUSES = (OVERRIDE_ACTIVE, OVERRIDE_INACTIVE, OVERRIDE_LAPSED, OVERRI
 # normal replace_all()) now blocks up to 3x longer before failing.
 BUSY_TIMEOUT_MS = 15000
 
+# Rows per INSERT statement in replace_all(). Deliberately NOT executemany:
+# against a Turso connection that round-trips once per row, and at the ~113ms
+# round trip measured to aws-ap-south-1 on 2026-08-02, executemany over the
+# full 142k-row register takes ~4.5 hours and just looks like a hang (it hung
+# twice before being measured). Folding the rows into multi-row INSERT ...
+# VALUES (...),(...) statements makes the same load ~17s, because the row
+# count stops driving the round-trip count. 2000 rows x 8 columns = 16000 bound
+# parameters, comfortably under SQLite's 32766 SQLITE_MAX_VARIABLE_NUMBER, so
+# this is bounded by the parameter limit rather than tuned for throughput.
+INSERT_BATCH_ROWS = 2000
+
 
 @dataclass(frozen=True)
 class SponsorRecord:
@@ -89,17 +100,17 @@ def replace_all(conn: sqlite3.Connection, records: list[SponsorRecord]) -> int:
 
     The register is a periodic full snapshot, not an incremental feed, so
     replace-all on each ingest run is the correct model, not a diff.
+
+    Batched into multi-row INSERTs rather than executemany - see
+    INSERT_BATCH_ROWS for why that difference is hours, not milliseconds.
     """
     with conn:
         conn.execute("DELETE FROM sponsors")
-        conn.executemany(
-            """
-            INSERT INTO sponsors
-                (organisation_name, trading_name, match_key, town_city, county, rating, route, source_updated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                (
+        for start in range(0, len(records), INSERT_BATCH_ROWS):
+            batch = records[start : start + INSERT_BATCH_ROWS]
+            params: list[object] = []
+            for r in batch:
+                params += [
                     r.organisation_name,
                     r.trading_name,
                     r.match_key,
@@ -108,10 +119,16 @@ def replace_all(conn: sqlite3.Connection, records: list[SponsorRecord]) -> int:
                     r.rating,
                     r.route,
                     r.source_updated,
-                )
-                for r in records
-            ],
-        )
+                ]
+            conn.execute(
+                """
+                INSERT INTO sponsors
+                    (organisation_name, trading_name, match_key, town_city, county, rating, route, source_updated)
+                VALUES
+                """
+                + ",".join(["(?, ?, ?, ?, ?, ?, ?, ?)"] * len(batch)),
+                params,
+            )
     return len(records)
 
 

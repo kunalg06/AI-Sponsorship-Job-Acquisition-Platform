@@ -7,6 +7,7 @@ import pytest
 from register import ingest as ingest_module
 from register.db import (
     BUSY_TIMEOUT_MS,
+    INSERT_BATCH_ROWS,
     SponsorRecord,
     connect,
     count,
@@ -279,3 +280,43 @@ def test_is_noop_refresh_false_when_both_unparseable():
     assert is_noop_refresh(None, None) is False
     assert is_noop_refresh("", "") is False
     assert is_noop_refresh("", None) is False
+
+
+def test_replace_all_loads_every_row_across_batch_boundaries(tmp_path):
+    """replace_all() batches rows into multi-row INSERTs (see INSERT_BATCH_ROWS),
+    so the row count must survive a load that is not a whole number of batches -
+    off-by-one slicing here would silently drop or duplicate real sponsors."""
+    total = INSERT_BATCH_ROWS * 2 + 7
+    records = [
+        SponsorRecord(
+            organisation_name=f"Company {i} Ltd",
+            trading_name=None,
+            match_key=f"company{i}ltd",
+            town_city="London",
+            county="Greater London",
+            rating="Worker (A rating)",
+            route="Skilled Worker",
+            source_updated="2026-07-03",
+        )
+        for i in range(total)
+    ]
+    conn = connect(tmp_path / "sponsors.db")
+    try:
+        assert replace_all(conn, records) == total
+        assert count(conn) == total
+        # Spot-check a row from the first, middle, and final partial batch.
+        for i in (0, INSERT_BATCH_ROWS, total - 1):
+            rows = lookup(conn, f"company{i}ltd")
+            assert len(rows) == 1
+            assert rows[0]["organisation_name"] == f"Company {i} Ltd"
+            assert rows[0]["town_city"] == "London"
+    finally:
+        conn.close()
+
+
+def test_replace_all_stays_under_the_sqlite_bound_parameter_limit():
+    """A batch is INSERT_BATCH_ROWS x 8 bound parameters in one statement.
+    SQLite's SQLITE_MAX_VARIABLE_NUMBER is 32766 on modern builds; exceeding it
+    raises OperationalError at ingest time, so the batch size is capped by that
+    limit rather than free to be tuned upward for throughput."""
+    assert INSERT_BATCH_ROWS * 8 <= 32766

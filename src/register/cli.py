@@ -4,9 +4,17 @@ from __future__ import annotations
 
 import argparse
 
+import truststore
+
 from register import ingest as ingest_module
 from register.db import connect, lookup
 from register.normalize import make_match_key
+
+# Same call, same reason, as jobs/cli.py: this machine's trust anchor is in the
+# OS store, not in certifi's bundle, so `ingest` downloading the register over
+# HTTPS fails with CERTIFICATE_VERIFY_FAILED without it. Must run before the
+# first urllib/httpx request, so it stays at import time.
+truststore.inject_into_ssl()
 
 DEFAULT_SOURCE = (
     "https://assets.publishing.service.gov.uk/media/6a47768c1c8bd7ce25a5ea44/"
