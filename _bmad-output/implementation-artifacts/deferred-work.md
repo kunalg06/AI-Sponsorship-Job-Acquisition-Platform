@@ -60,6 +60,12 @@
   evidence: Flagged in the adversarial review (2026-07-12) of the `requirements.txt` one-shot change. `requirements.txt` only fixes the *build* step; every Gemini-calling code path (`jobs/extract.py`, `jobs/tailor.py`, `jobs/outreach.py`) would still fail at the first LLM call on a fresh Cloud deploy without this fix.
   status: done 2026-07-12
   resolution: `app.py` now bridges `st.secrets["GEMINI_API_KEY"]` into `os.environ` on startup when not already set (env/`.env` always wins if present); swallows the case where no secrets source exists at all (expected for local dev), and prints a stderr diagnostic if the key is still missing after all sources are checked. Verified manually against a real `st.secrets` object (temporary `.streamlit/secrets.toml`, now gitignored) in both the present and absent cases. 153/153 tests still passing (no existing test covers `app.py` itself — see the new deferred entry below on why that's out of scope for this fix).
+  status: done 2026-08-24
+  resolution: Resolved by removal, not by fixing the drift. The Streamlit Community Cloud
+    deployment and the Turso account were both deleted on 2026-08-24, and
+    `spec-retire-cloud-deployment` deleted `requirements.txt` along with the rest of the
+    cloud surface. `uv.lock` is now the only dependency graph, resolved by `uv` on the one
+    machine that runs this - there is no second resolver left to drift from.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-gemini-api-key-secrets-bridge.md`
   summary: The `GEMINI_API_KEY` secrets-bridging logic in `app.py` has no automated test — `app.py` executes `st.set_page_config`/`st.navigation`/`pg.run()` as a side effect of module import, so a plain pytest import would run the whole page router, not just the bridging logic.

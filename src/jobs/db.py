@@ -9,7 +9,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-import dbcompat
 from jobs.extract import JobExtraction
 
 BUSY_TIMEOUT_MS = 5000
@@ -142,7 +141,8 @@ def delete_job(conn: sqlite3.Connection, job_id: int) -> None:
 def connect(db_path: str | Path) -> sqlite3.Connection:
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = dbcompat.connect(path, turso_env_prefix="JOBS")
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
     conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
     conn.executescript(SCHEMA)
     _ensure_columns(conn, "jobs", SCHEMA)
@@ -169,11 +169,9 @@ def insert_job(
     `source*`/`apply_url` args entirely, so they insert NULL exactly as
     before - only `jobs.cli._cmd_stage_indeed` passes them. `source_job_id`
     is the only one enforced unique (see `CREATE_INDEXES` above); passing it
-    for a posting that's already staged raises `sqlite3.IntegrityError` on
-    sqlite3, or a bare `ValueError` on the Turso/libsql backend (confirmed
-    empirically, not assumed - libsql has no IntegrityError subclass), which
-    callers must catch (see `_cmd_stage_indeed`'s friendly "already staged"
-    message) rather than crash on."""
+    for a posting that's already staged raises `sqlite3.IntegrityError`,
+    which callers must catch (see `_cmd_stage_indeed`'s friendly "already
+    staged" message) rather than crash on."""
     if source is not None and not source_job_id:
         raise ValueError("source_job_id is required whenever source is set - otherwise dedup can't be enforced.")
     with conn:

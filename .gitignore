@@ -5,24 +5,21 @@
 # the bare `.env` pattern does not match.
 .env.backup-*
 .streamlit/secrets.toml
-turso.env
 
 # Local runtime state (SQLite DBs, personal data)
 data/*.db
-# libsql embedded-replica sidecars (dbcompat.connect's Turso path) and the
-# quarantined pre-Turso file it backs up before replacing - same personal
-# data as data/*.db above, just under different filenames.
-data/*.db-info
+# SQLite journal/WAL sidecars - same personal data as data/*.db above, just
+# under different filenames.
 data/*.db-shm
 data/*.db-wal
-data/*.pre-turso-backup
-# Manual quarantine backups (a corrupted local replica renamed aside rather
-# than deleted) - same personal data as data/*.db above under a filename
-# none of the patterns above match.
+# Manual quarantine backups (a corrupted db renamed aside rather than
+# deleted) - same personal data as data/*.db above under a filename none of
+# the patterns above match.
 data/*.corrupt-backup-*
-# Pre-ingest rescue copies. dbcompat.connect() syncs the embedded replica from
-# the remote on open, so a remote that is empty/stale silently overwrites a
-# good local register - copy it aside under this name before any ingest run.
+# Pre-bulk-operation rescue copies. Originally added because Turso's replica
+# sync could overwrite a good local db from an empty remote; kept after Turso
+# was removed because copying a db aside before a bulk write is worth doing
+# regardless, and data/ has no backup.
 data/*.rescue-*
 data/tailored/
 

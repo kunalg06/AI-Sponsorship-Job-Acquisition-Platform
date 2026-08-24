@@ -8,8 +8,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-import dbcompat
-
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sponsors (
     id INTEGER PRIMARY KEY,
@@ -55,21 +53,26 @@ OVERRIDE_STATUSES = (OVERRIDE_ACTIVE, OVERRIDE_INACTIVE, OVERRIDE_LAPSED, OVERRI
 # (not committed anywhere - see spec-register-busy-timeout-tuning) found its
 # worst of 3 trials at 635ms. 15000ms is ~24x that worst-case trial - a
 # concurrent reader/writer waiting on replace_all()'s write lock gets a
-# comfortable margin for slower/virtualized disk I/O on an unmeasured deploy
-# target (e.g. Streamlit Cloud), at the cost of a real (if rare) tradeoff:
-# any *other* kind of lock contention (a hung/long transaction, not just a
-# normal replace_all()) now blocks up to 3x longer before failing.
+# comfortable margin for slower disk I/O, at the cost of a real (if rare)
+# tradeoff: any *other* kind of lock contention (a hung/long transaction, not
+# just a normal replace_all()) now blocks up to 3x longer before failing.
+# The margin was originally sized for an unmeasured cloud deploy target; that
+# target is gone, but the value is kept - it costs nothing on the happy path.
 BUSY_TIMEOUT_MS = 15000
 
-# Rows per INSERT statement in replace_all(). Deliberately NOT executemany:
-# against a Turso connection that round-trips once per row, and at the ~113ms
-# round trip measured to aws-ap-south-1 on 2026-08-02, executemany over the
-# full 142k-row register takes ~4.5 hours and just looks like a hang (it hung
-# twice before being measured). Folding the rows into multi-row INSERT ...
-# VALUES (...),(...) statements makes the same load ~17s, because the row
-# count stops driving the round-trip count. 2000 rows x 8 columns = 16000 bound
-# parameters, comfortably under SQLite's 32766 SQLITE_MAX_VARIABLE_NUMBER, so
-# this is bounded by the parameter limit rather than tuned for throughput.
+# Rows per INSERT statement in replace_all(). Introduced when this register
+# lived on Turso, where the connection round-tripped once per row: executemany
+# over the full 142k-row register took ~4.5 hours at the measured ~113ms round
+# trip and simply looked like a hang. Folding rows into multi-row INSERT ...
+# VALUES (...),(...) made the same load ~17s by decoupling the round-trip
+# count from the row count.
+#
+# Turso is gone and executemany would be perfectly fast against local SQLite,
+# so this no longer earns its keep on performance grounds - it is kept because
+# it is correct, already tested across batch boundaries, and reverting it is
+# churn with a real off-by-one risk for no gain. 2000 rows x 8 columns = 16000
+# bound parameters, comfortably under SQLite's 32766 SQLITE_MAX_VARIABLE_NUMBER,
+# which is what actually caps this number.
 INSERT_BATCH_ROWS = 2000
 
 
@@ -89,7 +92,8 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
     """Open (creating if needed) the sponsor register database."""
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = dbcompat.connect(path, turso_env_prefix="SPONSORS")
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
     conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
     conn.executescript(SCHEMA)
     return conn

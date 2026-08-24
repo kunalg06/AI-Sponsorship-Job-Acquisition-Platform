@@ -43,30 +43,26 @@ uv run streamlit run app.py
 
 This opens the Streamlit UI: paste a job posting in, review the roadmap, or browse the tracked jobs list.
 
-### Deploying to Streamlit Community Cloud
+### PDF export (optional)
 
-`requirements.txt` (a single `-e .` line) exists only for Streamlit Community Cloud, which installs with plain `pip` and doesn't understand `uv`/`uv.lock`. It reads dependencies straight from `pyproject.toml` via an editable install. `uv.lock` remains the source of truth for local development; `requirements.txt` is not kept in lockstep with it, so Cloud may resolve slightly newer dependency versions than what's tested locally.
+The resume/cover-letter PDF download buttons shell out to a headless LibreOffice
+(`soffice`), so that the original `.docx` formatting is rendered faithfully rather
+than reinterpreted through a lossier docx→HTML→PDF path. Install LibreOffice and
+either put `soffice` on `PATH` or point `SOFFICE_PATH` at the executable; on
+Windows the standard winget install location is detected automatically. Everything
+else in the app works without it — only PDF export raises `PdfConversionError`.
 
-`app.py` bridges `GEMINI_API_KEY` from Cloud's Secrets UI (`st.secrets`) into `os.environ` on startup, since `genai.Client()` only reads the latter — set the key under **Settings → Secrets** in the Cloud app dashboard (as `GEMINI_API_KEY = "..."`). A local `.env`/real environment variable always takes precedence over `st.secrets` if both happen to be set.
+### No deployment target
 
-`packages.txt` (`libreoffice`) tells Cloud to apt-install LibreOffice, which `jobs.pdf_export` shells out to (headless) for the resume/cover-letter PDF download buttons — the same binary this project uses locally. Installing the full `libreoffice` package noticeably slows Cloud's first build/cold start; that's accepted as the cost of faithfully rendering the original `.docx` formatting rather than reinterpreting it through a lossier docx→HTML→PDF path.
+This runs locally only. There is no hosting config, CI, or Dockerfile, and
+`data/*.db` is the single durable copy of your data — it is gitignored and not
+backed up anywhere, so copy it aside before anything destructive.
 
-**Persistence (Turso):** Cloud's container filesystem is ephemeral — a redeploy, sleep/wake cycle, or routine recycle wipes anything written locally, including a plain SQLite file. `dbcompat.connect()` (`src/dbcompat/`) transparently swaps each of the 4 local databases (`sponsors`, `jobs`, `profile`, `roadmap`) for a [Turso](https://turso.tech)-backed `libsql` embedded replica instead, whenever both `TURSO_{NAME}_URL` and `TURSO_{NAME}_TOKEN` are set — otherwise it falls back to the exact same plain `sqlite3.connect()` this project always used, so local dev is completely unaffected unless you deliberately configure it. Turso is a hosted, wire-compatible fork of SQLite: queries and schema don't change, only where the durable copy of the file lives.
-
-To enable it on Cloud, create 4 databases in your [Turso dashboard](https://app.turso.tech) (or via the CLI), then add all 8 secrets under **Settings → Secrets**:
-
-```toml
-TURSO_SPONSORS_URL = "libsql://..."
-TURSO_SPONSORS_TOKEN = "..."
-TURSO_JOBS_URL = "libsql://..."
-TURSO_JOBS_TOKEN = "..."
-TURSO_PROFILE_URL = "libsql://..."
-TURSO_PROFILE_TOKEN = "..."
-TURSO_ROADMAP_URL = "libsql://..."
-TURSO_ROADMAP_TOKEN = "..."
-```
-
-Verified live end-to-end against real Turso databases (not just unit tests) for all 4 domains: connect, insert, read, and a genuinely fresh second embedded replica confirming the write actually reached the remote server, not just the local replica file. One real API gap found and fixed along the way: `libsql.Connection` has no `row_factory` concept at all (rows come back as bare tuples, unlike `sqlite3.Row`) — `dbcompat.Row`/the adapter classes exist purely to keep every existing `row["column"]` call site across all 4 domains and every view working unchanged.
+A Streamlit Community Cloud deployment backed by [Turso](https://turso.tech)
+existed between 2026-07 and 2026-08 and was removed along with all of its
+supporting code; see `_bmad-output/specs/spec-retire-cloud-deployment/`. Cloud's
+filesystem is ephemeral, so restoring a deployment would mean re-solving
+persistence, not just re-adding a `requirements.txt`.
 
 ## CLI tools
 

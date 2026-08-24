@@ -13,25 +13,6 @@ from register.db import connect as connect_register
 from resume.db import connect as connect_profile
 
 
-@pytest.fixture(autouse=True)
-def _no_turso_env(monkeypatch):
-    """Guarantees every test hits a plain local sqlite file, never the real
-    Turso-backed production database - regardless of what happens to be in
-    the developer's own `.env`. `dbcompat.connect()` (see
-    `src/dbcompat/__init__.py`) keys entirely off `TURSO_{prefix}_URL`/
-    `_TOKEN` env vars, never the local path passed in - so once any test
-    imports `jobs.cli` (which calls `load_dotenv()` at module level), those
-    vars stay set process-wide for the rest of the pytest run, and even a
-    `tmp_path`-isolated `connect()` call silently opens an embedded replica
-    of the real shared database instead. Confirmed happening for real: a
-    full test-suite run wrote several `test_jobs_cli.py`/`test_ui_actions.py`
-    fixture rows ("Acme AI", "Bending Spoons") into production before this
-    fixture existed."""
-    for prefix in ("JOBS", "SPONSORS", "PROFILE", "ROADMAP"):
-        monkeypatch.delenv(f"TURSO_{prefix}_URL", raising=False)
-        monkeypatch.delenv(f"TURSO_{prefix}_TOKEN", raising=False)
-
-
 @pytest.fixture
 def streamlit_data_env(tmp_path, monkeypatch):
     """Chdir into `tmp_path` and seed empty-but-valid data/jobs.db,

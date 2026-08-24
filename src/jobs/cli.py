@@ -96,7 +96,7 @@ DEFAULT_SOURCE_RESUME_DIR = "cv/my-resume"
 
 
 def _resolve_generated_cv_dir() -> str:
-    """Reads GENERATED_CV_DIR from the environment (see app.py's st.secrets
+    """Reads GENERATED_CV_DIR from the environment (loaded from .env
     bridge for the Streamlit Cloud case), falling back to the historical
     default. `.strip()` also falls back on an empty/whitespace-only value
     (e.g. a stray "GENERATED_CV_DIR=" left in .env), not just when unset -
@@ -112,7 +112,7 @@ def _resolve_generated_cv_dir() -> str:
 
 # Every --out-dir default below AND every UI read/write site (jobs/ui_actions.py,
 # views/jobs_list.py, views/intake.py) import this same constant unmodified -
-# setting GENERATED_CV_DIR once (in .env, or via app.py's st.secrets bridge on
+# setting GENERATED_CV_DIR once (in .env, read by every entry point
 # Streamlit Cloud) keeps the CLI's own defaults and the UI pointed at the same
 # directory. An explicit --out-dir passed to a single CLI invocation still
 # deliberately overrides this per-command, same as before - only the *default*
@@ -311,13 +311,14 @@ def _cmd_stage_indeed(args: argparse.Namespace) -> None:
                 source_posted_at=posted_date.date().isoformat(),
                 apply_url=args.apply_url,
             )
-        except (sqlite3.IntegrityError, ValueError) as exc:
-            # libsql (the Turso/Streamlit-Cloud backend, unlike local
-            # sqlite3) raises a bare ValueError for a UNIQUE violation, not
-            # sqlite3.IntegrityError - confirmed empirically (`libsql.connect
-            # (":memory:")` + a real duplicate insert), not assumed from
-            # docs. Checking the message keeps this from swallowing an
-            # unrelated ValueError/IntegrityError as a false "already staged".
+        except sqlite3.IntegrityError as exc:
+            # Still message-checked rather than catching the whole class:
+            # `jobs` grows constraints over time, and reporting an unrelated
+            # violation as a cheerful "already staged" would hide it.
+            # (This once also caught a bare ValueError, because libsql - the
+            # Turso backend - had no IntegrityError subclass. Turso is gone;
+            # on plain sqlite3 that branch could only ever have fired for an
+            # unrelated error and silently mislabelled it.)
             if "UNIQUE constraint failed" not in str(exc):
                 raise
             print(f"Already staged (source_job_id={args.source_job_id!r}) - skipping.")

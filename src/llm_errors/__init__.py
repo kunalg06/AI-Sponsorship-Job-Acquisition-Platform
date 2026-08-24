@@ -3,7 +3,7 @@ call site across jobs/ and resume/ - each domain stays independent (own
 model, own prompt, own schema), but they all need the identical answer to
 one cross-cutting question: "which exceptions does a real API failure
 raise, and how does a caller turn one into a message a Streamlit user can
-actually read?" Same shape of problem `dbcompat` solves for SQLite-vs-Turso.
+actually read?"
 
 `google.genai.errors` (the public re-export, and what the SDK's own docs
 point to) covers the older `generate_content`-style client - confirmed
