@@ -515,7 +515,7 @@ def mark_discovery_reviewed(conn: sqlite3.Connection, job_id: int) -> None:
         )
 
 
-def list_discovery_queue(conn: sqlite3.Connection, limit: int = 20) -> list[sqlite3.Row]:
+def list_discovery_queue(conn: sqlite3.Connection, limit: int | None = 20) -> list[sqlite3.Row]:
     """The Automate page's review queue: every Indeed-sourced row not yet
     reviewed AND not already resolved elsewhere (applied or discarded via
     the ordinary Jobs List page) - without the `applied_status IS NULL`
@@ -531,7 +531,15 @@ def list_discovery_queue(conn: sqlite3.Connection, limit: int = 20) -> list[sqli
     is ever hard-filtered out), just at the bottom rather than the top.
     Capped at `limit` (mirrors `list_jobs`'s own default) since an unattended
     daily discovery agent can otherwise accumulate an unbounded queue - the
-    opposite of what a "too busy to review often" feature should do."""
+    opposite of what a "too busy to review often" feature should do.
+
+    `limit=None` returns the whole queue. That exists for callers that *act*
+    on the queue rather than display it: the Automate page's bulk triage has
+    to partition every unreviewed row, because triaging only the visible 20
+    of a 96-row queue would discard a handful, report success, and leave the
+    rest untouched - a silent partial action, which is exactly the failure
+    mode this codebase keeps having to design against. Display stays capped;
+    the action does not."""
     return conn.execute(
         """
         SELECT * FROM jobs
@@ -539,5 +547,7 @@ def list_discovery_queue(conn: sqlite3.Connection, limit: int = 20) -> list[sqli
         ORDER BY match_score DESC, source_posted_at DESC
         LIMIT ?
         """,
-        (limit,),
+        # SQLite treats a negative LIMIT as unbounded, so None becomes -1
+        # rather than needing a second, near-identical SQL string.
+        (-1 if limit is None else limit,),
     ).fetchall()

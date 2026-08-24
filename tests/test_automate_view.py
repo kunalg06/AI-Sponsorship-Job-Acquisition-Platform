@@ -156,7 +156,9 @@ def test_multiple_unreviewed_rows_shows_the_correct_count_caption(streamlit_data
 
     assert not at.exception
     captions = [c.value for c in at.caption]
-    assert any("2 shown now" in c for c in captions)
+    # The caption names displayed-vs-total explicitly: a capped list must never
+    # read as the whole queue (see DISPLAY_LIMIT in views/automate.py).
+    assert any("Showing 2 of 2 unreviewed candidates" in c for c in captions)
 
 
 def test_automate_page_shows_missing_and_matched_skills_so_a_low_score_is_auditable(streamlit_data_env):
@@ -235,3 +237,109 @@ def test_automate_page_survives_malformed_skills_json_without_crashing(streamlit
 
     assert not at.exception
     assert "70/100" in " ".join(m.value for m in at.markdown)
+
+
+def _seed_scored_row(jobs_db_path, *, source_job_id: str, score: int | None, title: str = "AI Engineer") -> int:
+    """Stage one Indeed row and give it `score` (None leaves match_score NULL)."""
+    conn = connect_jobs(jobs_db_path)
+    try:
+        job_id = insert_job(
+            conn,
+            "Full Indeed posting text.",
+            JobExtraction(
+                job_title=title,
+                company_name="Acme AI",
+                is_agency_posting=False,
+                location="London, UK",
+            ),
+            source="indeed",
+            source_job_id=source_job_id,
+            source_posted_at="2026-07-20",
+            apply_url="https://to.indeed.com/abc123",
+        )
+        if score is not None:
+            update_match_verdict(
+                conn, job_id, score=score, verdict="strong_match", matched_skills=[], missing_skills=[], reasoning="."
+            )
+        return job_id
+    finally:
+        conn.close()
+
+
+def test_list_discovery_queue_limit_none_returns_the_whole_queue(tmp_path):
+    """The display cap must not become an action cap - see the whole-queue
+    comment on list_discovery_queue. 25 rows is past the default 20."""
+    jobs_db_path = str(tmp_path / "jobs.db")
+    for i in range(25):
+        _seed_scored_row(jobs_db_path, source_job_id=f"indeed-{i}", score=90)
+
+    conn = connect_jobs(jobs_db_path)
+    try:
+        assert len(list_discovery_queue(conn)) == 20  # unchanged default
+        assert len(list_discovery_queue(conn, limit=None)) == 25
+    finally:
+        conn.close()
+
+
+def test_bulk_triage_discards_below_threshold_rows_beyond_the_displayed_page(streamlit_data_env):
+    """The regression this feature exists to prevent: triaging a 25-row queue
+    while only 20 are rendered must still discard the low scorers sitting
+    below the fold, not silently leave them queued."""
+    jobs_db_path = streamlit_data_env["jobs_db"]
+    high = [_seed_scored_row(jobs_db_path, source_job_id=f"hi-{i}", score=90) for i in range(20)]
+    low = [_seed_scored_row(jobs_db_path, source_job_id=f"lo-{i}", score=40) for i in range(5)]
+
+    at = AppTest.from_file(AUTOMATE_PY)
+    at.run()
+    at.button(key="triage_preview").click().run()
+    at.button(key="triage_apply").click().run()
+
+    assert not at.exception
+    conn = connect_jobs(jobs_db_path)
+    try:
+        remaining = {row["id"] for row in list_discovery_queue(conn, limit=None)}
+    finally:
+        conn.close()
+    assert remaining == set(high), "every below-threshold row should be discarded, including the un-rendered ones"
+    assert not (remaining & set(low))
+
+
+def test_bulk_triage_never_discards_an_unscored_row(streamlit_data_env):
+    """A NULL match_score is an absence of information, not a low score -
+    partition_discovery_queue's third bucket exists for exactly this."""
+    jobs_db_path = streamlit_data_env["jobs_db"]
+    unscored = _seed_scored_row(jobs_db_path, source_job_id="none-1", score=None)
+    low = _seed_scored_row(jobs_db_path, source_job_id="lo-1", score=30)
+
+    at = AppTest.from_file(AUTOMATE_PY)
+    at.run()
+    at.button(key="triage_preview").click().run()
+    at.button(key="triage_apply").click().run()
+
+    assert not at.exception
+    conn = connect_jobs(jobs_db_path)
+    try:
+        remaining = {row["id"] for row in list_discovery_queue(conn, limit=None)}
+    finally:
+        conn.close()
+    assert unscored in remaining
+    assert low not in remaining
+
+
+def test_bulk_triage_preview_alone_changes_nothing(streamlit_data_env):
+    """Preview and commit are two separate actions - previewing must be a
+    pure read, since data/*.db has no backup."""
+    jobs_db_path = streamlit_data_env["jobs_db"]
+    low = _seed_scored_row(jobs_db_path, source_job_id="lo-1", score=30)
+
+    at = AppTest.from_file(AUTOMATE_PY)
+    at.run()
+    at.button(key="triage_preview").click().run()
+
+    assert not at.exception
+    conn = connect_jobs(jobs_db_path)
+    try:
+        remaining = {row["id"] for row in list_discovery_queue(conn, limit=None)}
+    finally:
+        conn.close()
+    assert low in remaining, "preview must not mutate anything"

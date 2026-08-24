@@ -1,5 +1,9 @@
 # Secrets
 .env
+# Timestamped .env copies taken before a config change (e.g. the Turso
+# removal on 2026-08-24). Same secrets as .env itself under a filename
+# the bare `.env` pattern does not match.
+.env.backup-*
 .streamlit/secrets.toml
 turso.env
 

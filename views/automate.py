@@ -20,11 +20,23 @@ import json
 import streamlit as st
 
 from jobs.db import connect as connect_jobs
-from jobs.db import list_discovery_queue, mark_discovery_reviewed
+from jobs.db import list_discovery_queue, mark_discarded, mark_discovery_reviewed
+from jobs.match_score import DISCOVERY_TRIAGE_THRESHOLD, partition_discovery_queue
 from jobs.sponsor_check import CANNOT_VERIFY, CONFIRMED, FUZZY_MATCH, NOT_FOUND, SKIPPED, USER_CONFIRMED, USER_FLAGGED
 from views.theme import set_page_wonk
 
 JOBS_DB = "data/jobs.db"
+
+# How many queue rows this page renders. The triage control below deliberately
+# does NOT use this number - see the whole-queue comment in the triage block.
+DISPLAY_LIMIT = 20
+
+# Session-state keys holding a previewed triage. The commit button acts on the
+# ids stored here rather than re-partitioning, so it can only ever discard the
+# exact set the user was shown - a threshold change (or a discovery run landing
+# between the two clicks) can't silently widen the blast radius.
+_TRIAGE_PREVIEW = "automate_triage_preview"
+_TRIAGE_THRESHOLD = "automate_triage_threshold"
 
 # Mirrors views/jobs_list.py's own STATUS_COLOR exactly - same verdicts,
 # same colors, so a sponsor badge never means something different depending
@@ -66,9 +78,74 @@ st.caption(
 
 conn = connect_jobs(JOBS_DB)
 try:
-    queue = list_discovery_queue(conn)
+    # The WHOLE queue, not DISPLAY_LIMIT rows: the triage control partitions
+    # every unreviewed row, and the header below reports the real depth so a
+    # capped list can never read as "that's all of them".
+    full_queue = list_discovery_queue(conn, limit=None)
 finally:
     conn.close()
+
+queue = full_queue[:DISPLAY_LIMIT]
+
+if full_queue:
+    with st.expander(f"Bulk triage ({len(full_queue)} unreviewed)", expanded=False):
+        st.caption(
+            "Discards everything scoring below the threshold so the queue is worth reading again. "
+            "Acts on all "
+            f"{len(full_queue)} unreviewed candidates, not just the {min(len(full_queue), DISPLAY_LIMIT)} listed below. "
+            "Discarding is reversible - rows stay readable under Jobs List's Discarded filter."
+        )
+        threshold = st.slider(
+            "Keep candidates scoring at or above",
+            min_value=50,
+            max_value=95,
+            value=st.session_state.get(_TRIAGE_THRESHOLD, DISCOVERY_TRIAGE_THRESHOLD),
+            step=5,
+            help=(
+                "Neither this default nor the 70 used for STRONG MATCH has been validated against "
+                "real interview outcomes - preview before committing."
+            ),
+        )
+        keep, discard, unscored = partition_discovery_queue(full_queue, threshold)
+
+        if st.button("Preview triage", key="triage_preview"):
+            st.session_state[_TRIAGE_THRESHOLD] = threshold
+            st.session_state[_TRIAGE_PREVIEW] = [row["id"] for row in discard]
+            st.rerun()
+
+        preview_ids = st.session_state.get(_TRIAGE_PREVIEW)
+        if preview_ids is not None:
+            shown_threshold = st.session_state.get(_TRIAGE_THRESHOLD, threshold)
+            st.markdown(
+                f"**Keep {len(keep)}** &nbsp;·&nbsp; **Discard {len(preview_ids)}** &nbsp;·&nbsp; "
+                f"**Leave {len(unscored)} unscored** — at threshold {shown_threshold}/100"
+            )
+            if unscored:
+                st.caption(
+                    f"{len(unscored)} row(s) were never scored (no resume on file when they were staged). "
+                    "An unscored row is unjudged, not rejected - it stays in the queue either way."
+                )
+            if preview_ids:
+                with st.container(border=True):
+                    for row in discard[:10]:
+                        st.caption(f"#{row['id']} · {row['match_score']}/100 · {row['job_title']} @ {row['company_name'] or '-'}")
+                    if len(discard) > 10:
+                        st.caption(f"...and {len(discard) - 10} more")
+                cols = st.columns(2)
+                if cols[0].button(f"Discard {len(preview_ids)} now", key="triage_apply", type="primary"):
+                    apply_conn = connect_jobs(JOBS_DB)
+                    try:
+                        for job_id in preview_ids:
+                            mark_discarded(apply_conn, job_id)
+                    finally:
+                        apply_conn.close()
+                    st.session_state.pop(_TRIAGE_PREVIEW, None)
+                    st.rerun()
+                if cols[1].button("Cancel", key="triage_cancel"):
+                    st.session_state.pop(_TRIAGE_PREVIEW, None)
+                    st.rerun()
+            else:
+                st.caption("Nothing scores below this threshold - nothing to discard.")
 
 if not queue:
     st.info(
@@ -77,8 +154,12 @@ if not queue:
     )
 else:
     st.caption(
-        f"Showing up to 20 unreviewed candidates ({len(queue)} shown now), highest match first. "
-        "There may be more waiting below these."
+        f"Showing {len(queue)} of {len(full_queue)} unreviewed candidates, highest match first."
+        + (
+            f" The other {len(full_queue) - len(queue)} are still queued - use Bulk triage above to thin them out."
+            if len(full_queue) > len(queue)
+            else ""
+        )
     )
 
     for job in queue:
